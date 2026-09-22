@@ -91,12 +91,17 @@ fn run_fixture(
         }
     };
 
-    let (passed, reason) = validate_sapient_message(message);
-    if passed != expected {
+    let outcome = validate_sapient_message(message);
+    if outcome.passed != expected {
+        let reason = outcome
+            .findings
+            .first()
+            .map(|finding| format!("[{}] {}", finding.rule_id, finding.message))
+            .unwrap_or_default();
         return Err(format!(
             "expected validation to {} but it {}: {reason}",
             if expected { "pass" } else { "fail" },
-            if passed { "passed" } else { "failed" },
+            if outcome.passed { "passed" } else { "failed" },
         )
         .into());
     }

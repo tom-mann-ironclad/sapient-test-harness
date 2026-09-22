@@ -17,4 +17,7 @@
 
 pub use sapient_rs::bsi_flex_335_v2_0;
 
+pub mod finding;
 pub mod validation;
+
+pub use finding::{Finding, Severity, ValidationOutcome};

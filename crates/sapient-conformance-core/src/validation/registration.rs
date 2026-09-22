@@ -16,6 +16,7 @@ use crate::bsi_flex_335_v2_0::{
         TaxonomyDockDefinition, VelocityType,
     },
 };
+use crate::finding::ValidationOutcome;
 use crate::validation::common::{
     validate_location_coordinate_system,
     validate_location_or_range_bearing as validate_common_location_or_range_bearing,
@@ -24,7 +25,7 @@ use crate::validation::common::{
 };
 
 /// Function to validation a SAPIENT registration message
-pub fn validate_registration(registration: Registration) -> (bool, String) {
+pub fn validate_registration(registration: Registration) -> ValidationOutcome {
     let mut validations = vec![];
 
     // Check node type
@@ -38,9 +39,9 @@ pub fn validate_registration(registration: Registration) -> (bool, String) {
 
     // Check status definition
     if registration.status_definition.is_none() {
-        return (
-            false,
-            "Status definition must be specified in registration.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.status_definition.missing",
+            "Status definition must be specified in registration.",
         );
     }
     validations.push(validate_status_definition(
@@ -60,61 +61,64 @@ pub fn validate_registration(registration: Registration) -> (bool, String) {
     validations.push(validate_config_data(registration.config_data));
 
     for validation in validations {
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check the node definition as specified in the BSI Flex 335 V2.0
-fn validate_node_definition(node_definitions: Vec<NodeDefinition>) -> (bool, String) {
+fn validate_node_definition(node_definitions: Vec<NodeDefinition>) -> ValidationOutcome {
     if node_definitions.is_empty() {
-        return (
-            false,
-            "Node type must be specified in node defintition.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.node_definition.empty",
+            "Node type must be specified in node defintition.",
         );
     }
     for node_definition in node_definitions {
         let node_type_validation = validate_required_nonzero(
             node_definition.node_type,
+            "registration.node_definition.node_type.missing",
             "Node type must be specified in node defintition.",
         );
-        if !node_type_validation.0 {
+        if !node_type_validation.passed {
             return node_type_validation;
         }
     }
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_capabilities(capabilities: Vec<Capability>) -> (bool, String) {
+fn validate_capabilities(capabilities: Vec<Capability>) -> ValidationOutcome {
     if capabilities.is_empty() {
-        return (
-            false,
-            "Capabilities must be specified in registration.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.capabilities.empty",
+            "Capabilities must be specified in registration.",
         );
     }
 
     for capability in capabilities {
         let category_validation = validate_required_string(
             capability.category.as_deref(),
+            "registration.capabilities.category.missing",
             "Capability category must be specified in registration.",
         );
-        if !category_validation.0 {
+        if !category_validation.passed {
             return category_validation;
         }
 
         let type_validation = validate_required_string(
             capability.r#type.as_deref(),
+            "registration.capabilities.type.missing",
             "Capability type must be specified in registration.",
         );
-        if !type_validation.0 {
+        if !type_validation.passed {
             return type_validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// The exact ICD version string a BSI Flex 335 v2.0 registration must declare.
@@ -123,116 +127,127 @@ fn validate_capabilities(capabilities: Vec<Capability>) -> (bool, String) {
 const REQUIRED_ICD_VERSION: &str = "BSI Flex 335 v2.0";
 
 /// Function to check the ICD version as specified in the BSI Flex 335 V2.0
-fn validate_icd_version(icd_version: Option<String>) -> (bool, String) {
+fn validate_icd_version(icd_version: Option<String>) -> ValidationOutcome {
     match icd_version {
-        Some(version) if version.is_empty() => (
-            false,
-            "No ICD version specified in registration message".to_string(),
+        Some(version) if version.is_empty() => ValidationOutcome::fail(
+            "registration.icd_version.missing",
+            "No ICD version specified in registration message",
         ),
-        Some(version) if version == REQUIRED_ICD_VERSION => (true, "".to_string()),
-        Some(_) => (
-            false,
-            "ICD version specified in registration is not a valid option.".to_string(),
+        Some(version) if version == REQUIRED_ICD_VERSION => ValidationOutcome::pass(),
+        Some(_) => ValidationOutcome::fail(
+            "registration.icd_version.invalid",
+            "ICD version specified in registration is not a valid option.",
         ),
-        None => (
-            false,
-            "No ICD version specified in registration message".to_string(),
+        None => ValidationOutcome::fail(
+            "registration.icd_version.missing",
+            "No ICD version specified in registration message",
         ),
     }
 }
 
 /// Function to check the status definition as specified in the BSI Flex 335 V2.0
-fn validate_status_definition(status_definition: StatusDefinition) -> (bool, String) {
+fn validate_status_definition(status_definition: StatusDefinition) -> ValidationOutcome {
     // Check the status interval
     if status_definition.status_interval.is_none() {
-        return (
-            false,
-            "Status interval must be specified in status definition.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.status_definition.status_interval.missing",
+            "Status interval must be specified in status definition.",
         );
     }
     let valid_status_interval =
         validate_status_interval(status_definition.status_interval.unwrap());
-    if !valid_status_interval.0 {
+    if !valid_status_interval.passed {
         return valid_status_interval;
     }
 
     if let Some(location_definition) = status_definition.location_definition {
         let validation = validate_location_type(location_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     if let Some(coverage_definition) = status_definition.coverage_definition {
         let validation = validate_location_type(coverage_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     if let Some(obscuration_definition) = status_definition.obscuration_definition {
         let validation = validate_location_type(obscuration_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     if let Some(field_of_view_definition) = status_definition.field_of_view_definition {
         let validation = validate_location_type(field_of_view_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for status_report in status_definition.status_report {
         let validation = validate_status_report_definition(status_report);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check the status interval as specified in the BSI Flex 335 V2.0
-fn validate_status_interval(duration: Duration) -> (bool, String) {
+fn validate_status_interval(duration: Duration) -> ValidationOutcome {
     // Check the units
     let duration_units = validate_duration_units(duration.units);
-    if !duration_units.0 {
+    if !duration_units.passed {
         return duration_units;
     }
 
     // Check the value
-    let duration_value = validate_duration_value(duration.value);
-    if !duration_value.0 {
-        return duration_value;
-    }
-
-    (true, "".to_string())
+    validate_duration_value(duration.value)
 }
 
 /// Function to check the duration units as specified in the BSI Flex 335 V2.0
-fn validate_duration_units(units: Option<i32>) -> (bool, String) {
-    validate_required_nonzero(units, "Time Units must be specified.")
+///
+/// Shared by every `Duration`-typed field (status interval, mode settle
+/// time, region settle time, command completion time) -- the rule id
+/// identifies the check ("a duration needs units"), not which specific
+/// field embeds the `Duration`. See `src/finding.rs` for why this pass
+/// doesn't thread full per-field context through shared primitives.
+fn validate_duration_units(units: Option<i32>) -> ValidationOutcome {
+    validate_required_nonzero(
+        units,
+        "registration.duration.units.missing",
+        "Time Units must be specified.",
+    )
 }
 
 /// Function to check the duration units as specified in the BSI Flex 335 V2.0
-fn validate_duration_value(value: Option<f32>) -> (bool, String) {
+fn validate_duration_value(value: Option<f32>) -> ValidationOutcome {
     if value.is_none() {
-        return (false, "Duration value must be provided.".to_string());
+        return ValidationOutcome::fail(
+            "registration.duration.value.missing",
+            "Duration value must be provided.",
+        );
     }
     if value < Some(0.0) {
-        return (false, "Duration value must be 0 or greater.".to_string());
+        return ValidationOutcome::fail(
+            "registration.duration.value.invalid",
+            "Duration value must be 0 or greater.",
+        );
     }
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check the mode definitions as specified in the BSI Flex 335 V2.0
-fn validate_mode_definitions(mode_definitions: Vec<ModeDefinition>) -> (bool, String) {
+fn validate_mode_definitions(mode_definitions: Vec<ModeDefinition>) -> ValidationOutcome {
     if mode_definitions.is_empty() {
-        return (
-            false,
-            "Mode definition must be specified in registration.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.mode_definition.empty",
+            "Mode definition must be specified in registration.",
         );
     }
 
@@ -243,16 +258,16 @@ fn validate_mode_definitions(mode_definitions: Vec<ModeDefinition>) -> (bool, St
     }
 
     for validation in validations {
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check the mode definition as specified in the BSI Flex 335 V2.0
-fn validate_mode_definition(mode_definition: ModeDefinition) -> (bool, String) {
+fn validate_mode_definition(mode_definition: ModeDefinition) -> ValidationOutcome {
     let mut validations = vec![];
 
     // Check mode name
@@ -260,9 +275,9 @@ fn validate_mode_definition(mode_definition: ModeDefinition) -> (bool, String) {
 
     // Check settle time
     if mode_definition.settle_time.is_none() {
-        return (
-            false,
-            "Settle time must be specified in mode definition.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.mode_definition.settle_time.missing",
+            "Settle time must be specified in mode definition.",
         );
     }
     validations.push(validate_settle_time(mode_definition.settle_time.unwrap()));
@@ -281,300 +296,309 @@ fn validate_mode_definition(mode_definition: ModeDefinition) -> (bool, String) {
     validations.push(validate_mode_type(mode_definition.mode_type));
 
     for validation in validations {
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check the mode name as specified in the BSI Flex 335 V2.0
-fn validate_mode_name(mode_name: Option<String>) -> (bool, String) {
+fn validate_mode_name(mode_name: Option<String>) -> ValidationOutcome {
     validate_required_string(
         mode_name.as_deref(),
+        "registration.mode_definition.mode_name.missing",
         "Mode name must be specified in mode definition.",
     )
 }
 
 /// Function to check the settle time as specified in the BSI Flex 335 V2.0
-fn validate_settle_time(settle_time: Duration) -> (bool, String) {
+fn validate_settle_time(settle_time: Duration) -> ValidationOutcome {
     // Check the units
     let duration_units = validate_duration_units(settle_time.units);
-    if !duration_units.0 {
+    if !duration_units.passed {
         return duration_units;
     }
 
     // Check the value
-    let duration_value = validate_duration_value(settle_time.value);
-    if !duration_value.0 {
-        return duration_value;
-    }
-
-    (true, "".to_string())
+    validate_duration_value(settle_time.value)
 }
 
-fn validate_mode_parameter(mode_parameter: ModeParameter) -> (bool, String) {
+fn validate_mode_parameter(mode_parameter: ModeParameter) -> ValidationOutcome {
     let type_validation = validate_required_string(
         mode_parameter.r#type.as_deref(),
+        "registration.mode_parameter.type.missing",
         "Mode parameter type must be specified.",
     );
-    if !type_validation.0 {
+    if !type_validation.passed {
         return type_validation;
     }
 
-    let value_validation = validate_required_string(
+    validate_required_string(
         mode_parameter.value.as_deref(),
+        "registration.mode_parameter.value.missing",
         "Mode parameter value must be specified.",
-    );
-    if !value_validation.0 {
-        return value_validation;
-    }
-
-    (true, "".to_string())
+    )
 }
 
 /// Function to check the detection definition as specified in the BSI Flex 335 V2.0
-fn validate_detection_definition(detection_definition: DetectionDefinition) -> (bool, String) {
+fn validate_detection_definition(detection_definition: DetectionDefinition) -> ValidationOutcome {
     // Check location type
     if detection_definition.location_type.is_none() {
-        return (
-            false,
-            "Location type must be specified in detection definition.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.detection_definition.location_type.missing",
+            "Location type must be specified in detection definition.",
         );
     }
     let valid_location_type = validate_location_type(detection_definition.location_type.unwrap());
-    if !valid_location_type.0 {
+    if !valid_location_type.passed {
         return valid_location_type;
     }
 
     if let Some(geometric_error) = detection_definition.geometric_error {
         let validation = validate_geometric_error(geometric_error);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     if let Some(velocity_type) = detection_definition.velocity_type {
         let validation = validate_velocity_type(velocity_type);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for detection_performance in detection_definition.detection_performance {
         let validation = validate_performance_value(detection_performance);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for detection_report in detection_definition.detection_report {
         let validation = validate_detection_report_definition(detection_report);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for detection_class_definition in detection_definition.detection_class_definition {
         let validation = validate_detection_class_definition(detection_class_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for behaviour_definition in detection_definition.behaviour_definition {
         let validation = validate_behaviour_definition(behaviour_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check location type as specified in the BSI Flex 335 V2.0
-fn validate_location_type(location_type: LocationType) -> (bool, String) {
+fn validate_location_type(location_type: LocationType) -> ValidationOutcome {
     // Check location type coorindates
     if location_type.coordinates_oneof.is_none() {
-        return (
-            false,
-            "Units must be specified in location type.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.location_type.units.missing",
+            "Units must be specified in location type.",
         );
     };
     let valid_units = match location_type.coordinates_oneof.unwrap() {
         LocationUnits(units) => validate_location_coordinate_system(
             Some(units),
+            "registration.location_type.units.invalid",
             "Units must be specified in location type.",
         ),
         RangeBearingUnits(units) => validate_range_bearing_coordinate_system(
             Some(units),
+            "registration.location_type.units.invalid",
             "Units must be specified in location type.",
         ),
     };
-    if !valid_units.0 {
+    if !valid_units.passed {
         return valid_units;
     }
 
     // Check location type datum
     if location_type.datum_oneof.is_none() {
-        return (
-            false,
-            "Datum must be specified in location type.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.location_type.datum.missing",
+            "Datum must be specified in location type.",
         );
     };
-    let valid_datum = match location_type.datum_oneof.unwrap() {
+    match location_type.datum_oneof.unwrap() {
         LocationDatum(datum) => validate_coordinate_datum(datum),
         RangeBearingDatum(datum) => validate_coordinate_datum(datum),
-    };
-    if !valid_datum.0 {
-        return valid_datum;
     }
-
-    (true, "".to_string())
 }
 
 /// Function to check coordinate datum as specified in the BSI Flex 335 V2.0
-fn validate_coordinate_datum(datum: i32) -> (bool, String) {
-    validate_nonzero(datum, "Datum must be specified in location type.")
+fn validate_coordinate_datum(datum: i32) -> ValidationOutcome {
+    validate_nonzero(
+        datum,
+        "registration.location_type.datum.invalid",
+        "Datum must be specified in location type.",
+    )
 }
 
 /// Function to check the mode definition as specified in the BSI Flex 335 V2.0
-fn validate_task_definition(task_definition: Option<TaskDefinition>) -> (bool, String) {
+fn validate_task_definition(task_definition: Option<TaskDefinition>) -> ValidationOutcome {
     match task_definition {
-        None => (false, "Task definition must be populated".to_string()),
+        None => ValidationOutcome::fail(
+            "registration.task_definition.missing",
+            "Task definition must be populated",
+        ),
         Some(task_def) => {
             match task_def.concurrent_tasks {
                 None => {
-                    return (
-                        false,
-                        "Concurrent tasks must be specified in task definition.".to_string(),
+                    return ValidationOutcome::fail(
+                        "registration.task_definition.concurrent_tasks.missing",
+                        "Concurrent tasks must be specified in task definition.",
                     );
                 }
                 Some(concurrent_tasks) if concurrent_tasks < 0 => {
-                    return (false, "Concurrent tasks must be 0 or greater.".to_string());
+                    return ValidationOutcome::fail(
+                        "registration.task_definition.concurrent_tasks.invalid",
+                        "Concurrent tasks must be 0 or greater.",
+                    );
                 }
                 Some(_) => {}
             }
 
             // Check region definition
             if task_def.region_definition.is_none() {
-                return (
-                    false,
-                    "Region definition must be specified in task definition.".to_string(),
+                return ValidationOutcome::fail(
+                    "registration.task_definition.region_definition.missing",
+                    "Region definition must be specified in task definition.",
                 );
             }
             let valid_region_definition =
                 validate_region_definition(task_def.region_definition.unwrap());
-            if !valid_region_definition.0 {
+            if !valid_region_definition.passed {
                 return valid_region_definition;
             }
 
             for command in task_def.command {
                 let validation = validate_command_definition(command);
-                if !validation.0 {
+                if !validation.passed {
                     return validation;
                 }
             }
 
-            (true, "".to_string())
+            ValidationOutcome::pass()
         }
     }
 }
 
 /// Function to check region definition as specified in the BSI Flex 335 V2.0
-fn validate_region_definition(region_definition: RegionDefinition) -> (bool, String) {
+fn validate_region_definition(region_definition: RegionDefinition) -> ValidationOutcome {
     // Check region type
     if region_definition.region_type.is_empty() {
-        return (
-            false,
-            "Region type must be specified in region definition.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.region_definition.region_type.empty",
+            "Region type must be specified in region definition.",
         );
     }
     for region_type in region_definition.region_type {
         let valid_region_type = region_type != 0;
         if !valid_region_type {
-            return (
-                false,
-                "Region type must be specified in region definition.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.region_definition.region_type.invalid",
+                "Region type must be specified in region definition.",
             );
         }
     }
 
     if let Some(settle_time) = region_definition.settle_time {
         let validation = validate_settle_time(settle_time);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     if region_definition.region_area.is_empty() {
-        return (
-            false,
-            "Region area must be specified in region definition.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.region_definition.region_area.empty",
+            "Region area must be specified in region definition.",
         );
     }
 
     // Check location type
     for region_area in region_definition.region_area {
         let valid_region_area = validate_location_type(region_area);
-        if !valid_region_area.0 {
+        if !valid_region_area.passed {
             return valid_region_area;
         }
     }
 
     for class_filter_definition in region_definition.class_filter_definition {
         let validation = validate_class_filter_definition(class_filter_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for behaviour_filter_definition in region_definition.behaviour_filter_definition {
         let validation = validate_behaviour_filter_definition(behaviour_filter_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check the mode definition as specified in the BSI Flex 335 V2.0
-fn validate_mode_type(mode_type: Option<i32>) -> (bool, String) {
-    validate_required_nonzero(mode_type, "Mode type must be specified.")
+fn validate_mode_type(mode_type: Option<i32>) -> ValidationOutcome {
+    validate_required_nonzero(
+        mode_type,
+        "registration.mode_definition.mode_type.missing",
+        "Mode type must be specified.",
+    )
 }
 
 fn validate_status_report_definition(
     status_report: crate::bsi_flex_335_v2_0::registration::StatusReport,
-) -> (bool, String) {
+) -> ValidationOutcome {
     let category_validation = validate_required_nonzero(
         status_report.category,
+        "registration.status_definition.status_report.category.missing",
         "Status report category must be specified in registration.",
     );
-    if !category_validation.0 {
+    if !category_validation.passed {
         return category_validation;
     }
 
     validate_required_string(
         status_report.r#type.as_deref(),
+        "registration.status_definition.status_report.type.missing",
         "Status report type must be specified in registration.",
     )
 }
 
-fn validate_geometric_error(geometric_error: GeometricError) -> (bool, String) {
+fn validate_geometric_error(geometric_error: GeometricError) -> ValidationOutcome {
     match geometric_error.r#type.as_deref() {
         Some("") | None => {
-            return (false, "Geometric error type must be specified.".to_string());
+            return ValidationOutcome::fail(
+                "registration.geometric_error.type.missing",
+                "Geometric error type must be specified.",
+            );
         }
         Some(_) => {}
     }
 
     match geometric_error.units.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Geometric error units must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.geometric_error.units.missing",
+                "Geometric error units must be specified.",
             );
         }
         Some(_) => {}
@@ -582,9 +606,9 @@ fn validate_geometric_error(geometric_error: GeometricError) -> (bool, String) {
 
     match geometric_error.variation_type.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Geometric error variation type must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.geometric_error.variation_type.missing",
+                "Geometric error variation type must be specified.",
             );
         }
         Some(_) => {}
@@ -592,20 +616,20 @@ fn validate_geometric_error(geometric_error: GeometricError) -> (bool, String) {
 
     for performance_value in geometric_error.performance_value {
         let validation = validate_performance_value(performance_value);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_performance_value(performance_value: PerformanceValue) -> (bool, String) {
+fn validate_performance_value(performance_value: PerformanceValue) -> ValidationOutcome {
     match performance_value.r#type.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Performance value type must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.performance_value.type.missing",
+                "Performance value type must be specified.",
             );
         }
         Some(_) => {}
@@ -613,9 +637,9 @@ fn validate_performance_value(performance_value: PerformanceValue) -> (bool, Str
 
     match performance_value.units.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Performance value units must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.performance_value.units.missing",
+                "Performance value units must be specified.",
             );
         }
         Some(_) => {}
@@ -623,32 +647,32 @@ fn validate_performance_value(performance_value: PerformanceValue) -> (bool, Str
 
     match performance_value.unit_value.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Performance value unit value must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.performance_value.unit_value.missing",
+                "Performance value unit value must be specified.",
             );
         }
         Some(_) => {}
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 fn validate_detection_report_definition(
     detection_report: crate::bsi_flex_335_v2_0::registration::DetectionReport,
-) -> (bool, String) {
+) -> ValidationOutcome {
     if detection_report.category.is_none() || detection_report.category == Some(0) {
-        return (
-            false,
-            "Detection report category must be specified.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.detection_report.category.missing",
+            "Detection report category must be specified.",
         );
     }
 
     match detection_report.r#type.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Detection report type must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.detection_report.type.missing",
+                "Detection report type must be specified.",
             );
         }
         Some(_) => {}
@@ -656,50 +680,50 @@ fn validate_detection_report_definition(
 
     match detection_report.units.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Detection report units must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.detection_report.units.missing",
+                "Detection report units must be specified.",
             );
         }
         Some(_) => {}
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 fn validate_detection_class_definition(
     detection_class_definition: DetectionClassDefinition,
-) -> (bool, String) {
+) -> ValidationOutcome {
     for class_performance in detection_class_definition.class_performance {
         let validation = validate_performance_value(class_performance);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for class_definition in detection_class_definition.class_definition {
         let validation = validate_class_definition(class_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for taxonomy_dock_definition in detection_class_definition.taxonomy_dock_definition {
         let validation = validate_taxonomy_dock_definition(taxonomy_dock_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_class_definition(class_definition: ClassDefinition) -> (bool, String) {
+fn validate_class_definition(class_definition: ClassDefinition) -> ValidationOutcome {
     match class_definition.r#type.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Class definition type must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.class_definition.type.missing",
+                "Class definition type must be specified.",
             );
         }
         Some(_) => {}
@@ -707,137 +731,159 @@ fn validate_class_definition(class_definition: ClassDefinition) -> (bool, String
 
     for sub_class in class_definition.sub_class {
         let validation = validate_sub_class_definition(sub_class);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_sub_class_definition(sub_class: SubClass) -> (bool, String) {
+fn validate_sub_class_definition(sub_class: SubClass) -> ValidationOutcome {
     match sub_class.r#type.as_deref() {
         Some("") | None => {
-            return (false, "Sub class type must be specified.".to_string());
+            return ValidationOutcome::fail(
+                "registration.sub_class.type.missing",
+                "Sub class type must be specified.",
+            );
         }
         Some(_) => {}
     }
 
     if sub_class.level.is_none() {
-        return (false, "Sub class level must be specified.".to_string());
+        return ValidationOutcome::fail(
+            "registration.sub_class.level.missing",
+            "Sub class level must be specified.",
+        );
     }
 
     for nested_sub_class in sub_class.sub_class {
         let validation = validate_sub_class_definition(nested_sub_class);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_behaviour_definition(behaviour_definition: BehaviourDefinition) -> (bool, String) {
+fn validate_behaviour_definition(behaviour_definition: BehaviourDefinition) -> ValidationOutcome {
     match behaviour_definition.r#type.as_deref() {
-        Some("") | None => (
-            false,
-            "Behaviour definition type must be specified.".to_string(),
+        Some("") | None => ValidationOutcome::fail(
+            "registration.behaviour_definition.type.missing",
+            "Behaviour definition type must be specified.",
         ),
-        Some(_) => (true, "".to_string()),
+        Some(_) => ValidationOutcome::pass(),
     }
 }
 
-fn validate_velocity_type(velocity_type: VelocityType) -> (bool, String) {
+fn validate_velocity_type(velocity_type: VelocityType) -> ValidationOutcome {
     let velocity_units = match velocity_type.velocity_units_oneof {
         Some(EnuVelocityUnits(enu_velocity_units)) => enu_velocity_units,
         None => {
-            return (
-                false,
-                "Velocity units must be specified in velocity type.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.velocity_type.velocity_units.missing",
+                "Velocity units must be specified in velocity type.",
             );
         }
     };
 
     let units_validation = validate_enu_velocity_units(velocity_units);
-    if !units_validation.0 {
+    if !units_validation.passed {
         return units_validation;
     }
 
     if velocity_type.datum_oneof.is_none() {
-        return (
-            false,
-            "Datum must be specified in velocity type.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.velocity_type.datum.missing",
+            "Datum must be specified in velocity type.",
         );
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// `SpeedUnits` values 3 and 4 are `reserved` in `velocity.proto` (used up
 /// to SAPIENT v7, dropped for non-SI units) -- still legal `int32`s on the
 /// wire, so must be explicitly excluded rather than just checked for
 /// nonzero.
-fn validate_speed_units(value: Option<i32>, error_message: &str) -> (bool, String) {
+fn validate_speed_units(
+    value: Option<i32>,
+    rule_id: impl Into<String>,
+    error_message: &str,
+) -> ValidationOutcome {
     match value {
-        Some(v) if [1, 2].contains(&v) => (true, String::new()),
-        _ => (false, error_message.to_string()),
+        Some(v) if [1, 2].contains(&v) => ValidationOutcome::pass(),
+        _ => ValidationOutcome::fail(rule_id, error_message),
     }
 }
 
-fn validate_enu_velocity_units(enu_velocity_units: RegistrationEnuVelocityUnits) -> (bool, String) {
+fn validate_enu_velocity_units(
+    enu_velocity_units: RegistrationEnuVelocityUnits,
+) -> ValidationOutcome {
     let east_north_validation = validate_speed_units(
         enu_velocity_units.east_north_rate_units,
+        "registration.enu_velocity_units.east_north_rate_units.missing",
         "East/north rate units must be specified in velocity type.",
     );
-    if !east_north_validation.0 {
+    if !east_north_validation.passed {
         return east_north_validation;
     }
 
     if let Some(up_rate_units) = enu_velocity_units.up_rate_units {
         let up_rate_validation = validate_speed_units(
             Some(up_rate_units),
+            "registration.enu_velocity_units.up_rate_units.invalid",
             "Up rate units is not a valid option in velocity type.",
         );
-        if !up_rate_validation.0 {
+        if !up_rate_validation.passed {
             return up_rate_validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_command_definition(command: Command) -> (bool, String) {
+fn validate_command_definition(command: Command) -> ValidationOutcome {
     match command.units.as_deref() {
-        Some("") | None => return (false, "Command units must be specified.".to_string()),
+        Some("") | None => {
+            return ValidationOutcome::fail(
+                "registration.command.units.missing",
+                "Command units must be specified.",
+            );
+        }
         Some(_) => {}
     }
 
     if command.completion_time.is_none() {
-        return (
-            false,
-            "Command completion time must be specified.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.command.completion_time.missing",
+            "Command completion time must be specified.",
         );
     }
     let completion_time_validation = validate_settle_time(command.completion_time.unwrap());
-    if !completion_time_validation.0 {
+    if !completion_time_validation.passed {
         return completion_time_validation;
     }
 
     if command.r#type.is_none() || command.r#type == Some(0) {
-        return (false, "Command type must be specified.".to_string());
+        return ValidationOutcome::fail(
+            "registration.command.type.missing",
+            "Command type must be specified.",
+        );
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 fn validate_class_filter_definition(
     class_filter_definition: ClassFilterDefinition,
-) -> (bool, String) {
+) -> ValidationOutcome {
     match class_filter_definition.r#type.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Class filter definition type must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.class_filter_definition.type.missing",
+                "Class filter definition type must be specified.",
             );
         }
         Some(_) => {}
@@ -845,36 +891,36 @@ fn validate_class_filter_definition(
 
     for filter_parameter in class_filter_definition.filter_parameter {
         let validation = validate_filter_parameter(filter_parameter);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for sub_class_definition in class_filter_definition.sub_class_definition {
         let validation = validate_sub_class_filter_definition(sub_class_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 fn validate_sub_class_filter_definition(
     sub_class_filter_definition: SubClassFilterDefinition,
-) -> (bool, String) {
+) -> ValidationOutcome {
     if sub_class_filter_definition.level.is_none() {
-        return (
-            false,
-            "Sub class filter definition level must be specified.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.sub_class_filter_definition.level.missing",
+            "Sub class filter definition level must be specified.",
         );
     }
 
     match sub_class_filter_definition.r#type.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Sub class filter definition type must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.sub_class_filter_definition.type.missing",
+                "Sub class filter definition type must be specified.",
             );
         }
         Some(_) => {}
@@ -882,50 +928,50 @@ fn validate_sub_class_filter_definition(
 
     for filter_parameter in sub_class_filter_definition.filter_parameter {
         let validation = validate_filter_parameter(filter_parameter);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for nested_sub_class_definition in sub_class_filter_definition.sub_class_definition {
         let validation = validate_sub_class_filter_definition(nested_sub_class_definition);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_filter_parameter(filter_parameter: FilterParameter) -> (bool, String) {
+fn validate_filter_parameter(filter_parameter: FilterParameter) -> ValidationOutcome {
     match filter_parameter.parameter.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Filter parameter name must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.filter_parameter.parameter.missing",
+                "Filter parameter name must be specified.",
             );
         }
         Some(_) => {}
     }
 
     if filter_parameter.operators.is_empty() || filter_parameter.operators.contains(&0) {
-        return (
-            false,
-            "Filter parameter operators must be specified.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.filter_parameter.operators.invalid",
+            "Filter parameter operators must be specified.",
         );
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 fn validate_behaviour_filter_definition(
     behaviour_filter_definition: BehaviourFilterDefinition,
-) -> (bool, String) {
+) -> ValidationOutcome {
     match behaviour_filter_definition.r#type.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Behaviour filter definition type must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.behaviour_filter_definition.type.missing",
+                "Behaviour filter definition type must be specified.",
             );
         }
         Some(_) => {}
@@ -933,22 +979,22 @@ fn validate_behaviour_filter_definition(
 
     for filter_parameter in behaviour_filter_definition.filter_parameter {
         let validation = validate_filter_parameter(filter_parameter);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 fn validate_taxonomy_dock_definition(
     taxonomy_dock_definition: TaxonomyDockDefinition,
-) -> (bool, String) {
+) -> ValidationOutcome {
     match taxonomy_dock_definition.dock_class_namespace.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Taxonomy dock class namespace must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.taxonomy_dock_definition.dock_class_namespace.missing",
+                "Taxonomy dock class namespace must be specified.",
             );
         }
         Some(_) => {}
@@ -956,117 +1002,123 @@ fn validate_taxonomy_dock_definition(
 
     match taxonomy_dock_definition.dock_class.as_deref() {
         Some("") | None => {
-            return (false, "Taxonomy dock class must be specified.".to_string());
+            return ValidationOutcome::fail(
+                "registration.taxonomy_dock_definition.dock_class.missing",
+                "Taxonomy dock class must be specified.",
+            );
         }
         Some(_) => {}
     }
 
     for extension_subclass in taxonomy_dock_definition.extension_subclass {
         let validation = validate_extension_subclass(extension_subclass);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_extension_subclass(extension_subclass: ExtensionSubclass) -> (bool, String) {
+fn validate_extension_subclass(extension_subclass: ExtensionSubclass) -> ValidationOutcome {
     match extension_subclass.subclass_namespace.as_deref() {
         Some("") | None => {
-            return (
-                false,
-                "Extension subclass namespace must be specified.".to_string(),
+            return ValidationOutcome::fail(
+                "registration.extension_subclass.subclass_namespace.missing",
+                "Extension subclass namespace must be specified.",
             );
         }
         Some(_) => {}
     }
 
     match extension_subclass.subclass_name.as_deref() {
-        Some("") | None => (
-            false,
-            "Extension subclass name must be specified.".to_string(),
+        Some("") | None => ValidationOutcome::fail(
+            "registration.extension_subclass.subclass_name.missing",
+            "Extension subclass name must be specified.",
         ),
-        Some(_) => (true, "".to_string()),
+        Some(_) => ValidationOutcome::pass(),
     }
 }
 
-fn validate_dependent_nodes(dependent_nodes: Vec<String>) -> (bool, String) {
+fn validate_dependent_nodes(dependent_nodes: Vec<String>) -> ValidationOutcome {
     for dependent_node in dependent_nodes {
         let validation = validate_uuid_v4(
             Some(dependent_node.as_str()),
+            "registration.dependent_nodes.invalid",
             "A valid UUID v4 must be used for a dependent node ID in registration.",
         );
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 fn validate_reporting_region(
     reporting_region: Vec<crate::bsi_flex_335_v2_0::LocationOrRangeBearing>,
-) -> (bool, String) {
+) -> ValidationOutcome {
     for region in reporting_region {
         let validation = validate_common_location_or_range_bearing(
             region,
+            "registration.reporting_region",
             "Location or range-bearing must be specified in reporting region.",
         );
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_config_data(config_data: Vec<ConfigurationData>) -> (bool, String) {
+fn validate_config_data(config_data: Vec<ConfigurationData>) -> ValidationOutcome {
     if config_data.is_empty() {
-        return (
-            false,
-            "Configuration data must be specified in registration.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.config_data.empty",
+            "Configuration data must be specified in registration.",
         );
     }
 
     for configuration_data in config_data {
         let validation = validate_configuration_data_entry(configuration_data);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_configuration_data_entry(configuration_data: ConfigurationData) -> (bool, String) {
+fn validate_configuration_data_entry(configuration_data: ConfigurationData) -> ValidationOutcome {
     if configuration_data.manufacturer.is_empty() {
-        return (
-            false,
-            "Configuration data manufacturer must be specified.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.config_data.manufacturer.missing",
+            "Configuration data manufacturer must be specified.",
         );
     }
 
     if configuration_data.model.is_empty() {
-        return (
-            false,
-            "Configuration data model must be specified.".to_string(),
+        return ValidationOutcome::fail(
+            "registration.config_data.model.missing",
+            "Configuration data model must be specified.",
         );
     }
 
     for sub_component in configuration_data.sub_components {
         let validation = validate_configuration_data_entry(sub_component);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 #[cfg(test)]
 mod registration_validation_tests {
     use crate::bsi_flex_335_v2_0::registration::location_type::{CoordinatesOneof, DatumOneof};
+    use crate::finding::ValidationOutcome;
     use crate::validation::registration::*;
 
     /// Unit test to check that registration messages are correctly validated
@@ -1159,7 +1211,7 @@ mod registration_validation_tests {
             }],
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_registration(valid_registration)
         );
 
@@ -1189,9 +1241,9 @@ mod registration_validation_tests {
             }],
         };
         assert_eq!(
-            (
-                false,
-                "ICD version specified in registration is not a valid option.".to_string()
+            ValidationOutcome::fail(
+                "registration.icd_version.invalid",
+                "ICD version specified in registration is not a valid option."
             ),
             validate_registration(invalid_registration)
         );
@@ -1206,7 +1258,7 @@ mod registration_validation_tests {
             node_sub_type: vec![],
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_node_definition(vec![valid_node_definition])
         );
 
@@ -1216,18 +1268,18 @@ mod registration_validation_tests {
             node_sub_type: vec![],
         };
         assert_eq!(
-            (
-                false,
-                "Node type must be specified in node defintition.".to_string()
+            ValidationOutcome::fail(
+                "registration.node_definition.node_type.missing",
+                "Node type must be specified in node defintition."
             ),
             validate_node_definition(vec![invalid_node_definition])
         );
 
         // missing node definition
         assert_eq!(
-            (
-                false,
-                "Node type must be specified in node defintition.".to_string()
+            ValidationOutcome::fail(
+                "registration.node_definition.empty",
+                "Node type must be specified in node defintition."
             ),
             validate_node_definition(vec![])
         );
@@ -1238,15 +1290,15 @@ mod registration_validation_tests {
     fn test_icd_versions_validation() {
         // valid version
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_icd_version(Some("BSI Flex 335 v2.0".to_string()))
         );
 
         // invalid version
         assert_eq!(
-            (
-                false,
-                "ICD version specified in registration is not a valid option.".to_string()
+            ValidationOutcome::fail(
+                "registration.icd_version.invalid",
+                "ICD version specified in registration is not a valid option."
             ),
             validate_icd_version(Some("BSI Flex 335 v1.0".to_string()))
         );
@@ -1269,7 +1321,7 @@ mod registration_validation_tests {
             status_interval: Some(valid_duration),
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_status_definition(valid_status_definition)
         );
 
@@ -1283,9 +1335,9 @@ mod registration_validation_tests {
             status_interval: None,
         };
         assert_eq!(
-            (
-                false,
-                "Status interval must be specified in status definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.status_definition.status_interval.missing",
+                "Status interval must be specified in status definition."
             ),
             validate_status_definition(invalid_status_definition)
         );
@@ -1304,7 +1356,10 @@ mod registration_validation_tests {
             status_interval: Some(missing_value_duration),
         };
         assert_eq!(
-            (false, "Duration value must be 0 or greater.".to_string()),
+            ValidationOutcome::fail(
+                "registration.duration.value.invalid",
+                "Duration value must be 0 or greater."
+            ),
             validate_status_definition(missing_value_status_definition)
         );
     }
@@ -1318,7 +1373,7 @@ mod registration_validation_tests {
             value: Some(1.0),
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_status_interval(valid_duration)
         );
 
@@ -1328,7 +1383,10 @@ mod registration_validation_tests {
             value: Some(1.0),
         };
         assert_eq!(
-            (false, "Time Units must be specified.".to_string()),
+            ValidationOutcome::fail(
+                "registration.duration.units.missing",
+                "Time Units must be specified."
+            ),
             validate_status_interval(missing_units_duration)
         );
 
@@ -1338,7 +1396,10 @@ mod registration_validation_tests {
             value: None,
         };
         assert_eq!(
-            (false, "Duration value must be provided.".to_string()),
+            ValidationOutcome::fail(
+                "registration.duration.value.missing",
+                "Duration value must be provided."
+            ),
             validate_status_interval(missing_value_duration)
         );
     }
@@ -1348,12 +1409,15 @@ mod registration_validation_tests {
     fn test_duration_units_validation() {
         // valid units
         for i in 1..6 {
-            assert_eq!((true, "".to_string()), validate_duration_units(Some(i)));
+            assert_eq!(ValidationOutcome::pass(), validate_duration_units(Some(i)));
         }
 
         // invalid units
         assert_eq!(
-            (false, "Time Units must be specified.".to_string()),
+            ValidationOutcome::fail(
+                "registration.duration.units.missing",
+                "Time Units must be specified."
+            ),
             validate_duration_units(Some(0))
         );
     }
@@ -1364,20 +1428,26 @@ mod registration_validation_tests {
         // valid values
         for i in 0..500 {
             assert_eq!(
-                (true, "".to_string()),
+                ValidationOutcome::pass(),
                 validate_duration_value(Some(i as f32))
             );
         }
 
         // invalid values
         assert_eq!(
-            (false, "Duration value must be 0 or greater.".to_string()),
+            ValidationOutcome::fail(
+                "registration.duration.value.invalid",
+                "Duration value must be 0 or greater."
+            ),
             validate_duration_value(Some(-1.0))
         );
 
         // missing values
         assert_eq!(
-            (false, "Duration value must be provided.".to_string()),
+            ValidationOutcome::fail(
+                "registration.duration.value.missing",
+                "Duration value must be provided."
+            ),
             validate_duration_value(None)
         );
     }
@@ -1396,7 +1466,7 @@ mod registration_validation_tests {
             }],
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_geometric_error(valid_geometric_error)
         );
 
@@ -1412,9 +1482,9 @@ mod registration_validation_tests {
             }],
         };
         assert_eq!(
-            (
-                false,
-                "Performance value type must be specified.".to_string()
+            ValidationOutcome::fail(
+                "registration.performance_value.type.missing",
+                "Performance value type must be specified."
             ),
             validate_geometric_error(nested_invalid_performance_value)
         );
@@ -1471,7 +1541,7 @@ mod registration_validation_tests {
             tracking_type: None,
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_mode_definitions(vec![valid_mode_definition])
         );
 
@@ -1490,9 +1560,9 @@ mod registration_validation_tests {
             tracking_type: None,
         };
         assert_eq!(
-            (
-                false,
-                "Mode name must be specified in mode definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.mode_definition.mode_name.missing",
+                "Mode name must be specified in mode definition."
             ),
             validate_mode_definitions(vec![invalid_mode_definition])
         );
@@ -1549,7 +1619,7 @@ mod registration_validation_tests {
             tracking_type: None,
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_mode_definition(valid_mode_definition)
         );
 
@@ -1568,9 +1638,9 @@ mod registration_validation_tests {
             tracking_type: None,
         };
         assert_eq!(
-            (
-                false,
-                "Mode name must be specified in mode definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.mode_definition.mode_name.missing",
+                "Mode name must be specified in mode definition."
             ),
             validate_mode_definition(invalid_mode_definition)
         );
@@ -1590,9 +1660,9 @@ mod registration_validation_tests {
             tracking_type: None,
         };
         assert_eq!(
-            (
-                false,
-                "Settle time must be specified in mode definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.mode_definition.settle_time.missing",
+                "Settle time must be specified in mode definition."
             ),
             validate_mode_definition(missing_settle_time_mode_definition)
         );
@@ -1626,7 +1696,7 @@ mod registration_validation_tests {
             tracking_type: None,
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_mode_definition(mode_definition_without_detection_definitions)
         );
     }
@@ -1636,15 +1706,15 @@ mod registration_validation_tests {
     fn test_mode_name_validation() {
         // valid mode name
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_mode_name(Some("Default".to_string()))
         );
 
         // invalid mode name
         assert_eq!(
-            (
-                false,
-                "Mode name must be specified in mode definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.mode_definition.mode_name.missing",
+                "Mode name must be specified in mode definition."
             ),
             validate_mode_name(Some("".to_string()))
         );
@@ -1658,7 +1728,10 @@ mod registration_validation_tests {
             units: Some(1),
             value: Some(1.0),
         };
-        assert_eq!((true, "".to_string()), validate_settle_time(valid_duration));
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_settle_time(valid_duration)
+        );
 
         // missing units
         let missing_units_duration = Duration {
@@ -1666,7 +1739,10 @@ mod registration_validation_tests {
             value: Some(1.0),
         };
         assert_eq!(
-            (false, "Time Units must be specified.".to_string()),
+            ValidationOutcome::fail(
+                "registration.duration.units.missing",
+                "Time Units must be specified."
+            ),
             validate_settle_time(missing_units_duration)
         );
 
@@ -1676,7 +1752,10 @@ mod registration_validation_tests {
             value: Some(-1.0),
         };
         assert_eq!(
-            (false, "Duration value must be 0 or greater.".to_string()),
+            ValidationOutcome::fail(
+                "registration.duration.value.invalid",
+                "Duration value must be 0 or greater."
+            ),
             validate_settle_time(missing_value_duration)
         );
     }
@@ -1700,7 +1779,7 @@ mod registration_validation_tests {
             location_type: Some(valid_location_type),
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_detection_definition(valid_detection_definition)
         );
 
@@ -1715,9 +1794,9 @@ mod registration_validation_tests {
             location_type: None,
         };
         assert_eq!(
-            (
-                false,
-                "Location type must be specified in detection definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.detection_definition.location_type.missing",
+                "Location type must be specified in detection definition."
             ),
             validate_detection_definition(missing_location_type_detection_definition)
         );
@@ -1738,9 +1817,9 @@ mod registration_validation_tests {
             location_type: Some(missing_datum_location_type),
         };
         assert_eq!(
-            (
-                false,
-                "Datum must be specified in location type.".to_string()
+            ValidationOutcome::fail(
+                "registration.location_type.datum.missing",
+                "Datum must be specified in location type."
             ),
             validate_detection_definition(invalid_detection_definition)
         );
@@ -1756,7 +1835,7 @@ mod registration_validation_tests {
             zone: None,
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_location_type(valid_location_type)
         );
 
@@ -1767,9 +1846,9 @@ mod registration_validation_tests {
             zone: None,
         };
         assert_eq!(
-            (
-                false,
-                "Units must be specified in location type.".to_string()
+            ValidationOutcome::fail(
+                "registration.location_type.units.missing",
+                "Units must be specified in location type."
             ),
             validate_location_type(missing_units_location_type)
         );
@@ -1781,9 +1860,9 @@ mod registration_validation_tests {
             zone: None,
         };
         assert_eq!(
-            (
-                false,
-                "Datum must be specified in location type.".to_string()
+            ValidationOutcome::fail(
+                "registration.location_type.datum.missing",
+                "Datum must be specified in location type."
             ),
             validate_location_type(missing_datum_location_type)
         );
@@ -1795,9 +1874,9 @@ mod registration_validation_tests {
             zone: None,
         };
         assert_eq!(
-            (
-                false,
-                "Units must be specified in location type.".to_string()
+            ValidationOutcome::fail(
+                "registration.location_type.units.invalid",
+                "Units must be specified in location type."
             ),
             validate_location_type(invalid_location_type)
         );
@@ -1813,9 +1892,10 @@ mod registration_validation_tests {
     fn test_location_coorindate_units_validation() {
         for i in [1, 2, 5] {
             assert_eq!(
-                (true, "".to_string()),
+                ValidationOutcome::pass(),
                 validate_location_coordinate_system(
                     Some(i),
+                    "test.location_type.units",
                     "Units must be specified in location type."
                 )
             );
@@ -1823,12 +1903,13 @@ mod registration_validation_tests {
 
         for i in [0, 3, 4] {
             assert_eq!(
-                (
-                    false,
-                    "Units must be specified in location type.".to_string()
+                ValidationOutcome::fail(
+                    "test.location_type.units",
+                    "Units must be specified in location type."
                 ),
                 validate_location_coordinate_system(
                     Some(i),
+                    "test.location_type.units",
                     "Units must be specified in location type."
                 )
             );
@@ -1842,9 +1923,10 @@ mod registration_validation_tests {
     fn test_range_bearing_coorindate_units_validation() {
         for i in [1, 2, 3, 4] {
             assert_eq!(
-                (true, "".to_string()),
+                ValidationOutcome::pass(),
                 validate_range_bearing_coordinate_system(
                     Some(i),
+                    "test.location_type.units",
                     "Units must be specified in location type."
                 )
             );
@@ -1852,12 +1934,13 @@ mod registration_validation_tests {
 
         for i in [0, 5, 6] {
             assert_eq!(
-                (
-                    false,
-                    "Units must be specified in location type.".to_string()
+                ValidationOutcome::fail(
+                    "test.location_type.units",
+                    "Units must be specified in location type."
                 ),
                 validate_range_bearing_coordinate_system(
                     Some(i),
+                    "test.location_type.units",
                     "Units must be specified in location type."
                 )
             );
@@ -1869,14 +1952,14 @@ mod registration_validation_tests {
     fn test_coorindate_datums_validation() {
         // valid units
         for i in 1..6 {
-            assert_eq!((true, "".to_string()), validate_coordinate_datum(i));
+            assert_eq!(ValidationOutcome::pass(), validate_coordinate_datum(i));
         }
 
         // invalid units
         assert_eq!(
-            (
-                false,
-                "Datum must be specified in location type.".to_string()
+            ValidationOutcome::fail(
+                "registration.location_type.datum.invalid",
+                "Datum must be specified in location type."
             ),
             validate_coordinate_datum(0)
         );
@@ -1889,7 +1972,7 @@ mod registration_validation_tests {
     fn test_enu_velocity_units_validation() {
         for i in [1, 2] {
             assert_eq!(
-                (true, "".to_string()),
+                ValidationOutcome::pass(),
                 validate_enu_velocity_units(RegistrationEnuVelocityUnits {
                     east_north_rate_units: Some(i),
                     up_rate_units: Some(i),
@@ -1900,9 +1983,9 @@ mod registration_validation_tests {
         // mandatory east/north units missing or invalid
         for east_north in [None, Some(0), Some(3), Some(4)] {
             assert_eq!(
-                (
-                    false,
-                    "East/north rate units must be specified in velocity type.".to_string()
+                ValidationOutcome::fail(
+                    "registration.enu_velocity_units.east_north_rate_units.missing",
+                    "East/north rate units must be specified in velocity type."
                 ),
                 validate_enu_velocity_units(RegistrationEnuVelocityUnits {
                     east_north_rate_units: east_north,
@@ -1914,9 +1997,9 @@ mod registration_validation_tests {
         // optional up rate units, when present, must still be valid
         for up_rate in [Some(0), Some(3), Some(4)] {
             assert_eq!(
-                (
-                    false,
-                    "Up rate units is not a valid option in velocity type.".to_string()
+                ValidationOutcome::fail(
+                    "registration.enu_velocity_units.up_rate_units.invalid",
+                    "Up rate units is not a valid option in velocity type."
                 ),
                 validate_enu_velocity_units(RegistrationEnuVelocityUnits {
                     east_north_rate_units: Some(1),
@@ -1927,7 +2010,7 @@ mod registration_validation_tests {
 
         // up rate units is optional -- absent is fine
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_enu_velocity_units(RegistrationEnuVelocityUnits {
                 east_north_rate_units: Some(1),
                 up_rate_units: None,
@@ -1958,7 +2041,7 @@ mod registration_validation_tests {
             region_definition: Some(region_definition.clone()),
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_task_definition(Some(task_definition))
         );
 
@@ -1969,9 +2052,9 @@ mod registration_validation_tests {
             region_definition: None,
         };
         assert_eq!(
-            (
-                false,
-                "Region definition must be specified in task definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.task_definition.region_definition.missing",
+                "Region definition must be specified in task definition."
             ),
             validate_task_definition(Some(missing_region_type_task_definition))
         );
@@ -2000,7 +2083,7 @@ mod registration_validation_tests {
             region_definition: Some(region_definition.clone()),
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_task_definition(Some(task_definition))
         );
 
@@ -2011,9 +2094,9 @@ mod registration_validation_tests {
             region_definition: None,
         };
         assert_eq!(
-            (
-                false,
-                "Region definition must be specified in task definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.task_definition.region_definition.missing",
+                "Region definition must be specified in task definition."
             ),
             validate_task_definition(Some(missing_region_type_task_definition))
         );
@@ -2032,9 +2115,9 @@ mod registration_validation_tests {
             region_definition: Some(invalid_type_region_definition),
         };
         assert_eq!(
-            (
-                false,
-                "Region type must be specified in region definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.region_definition.region_type.invalid",
+                "Region type must be specified in region definition."
             ),
             validate_task_definition(Some(invalid_region_type_task_definition))
         );
@@ -2058,7 +2141,7 @@ mod registration_validation_tests {
             class_filter_definition: vec![],
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_region_definition(region_definition)
         );
 
@@ -2071,9 +2154,9 @@ mod registration_validation_tests {
             class_filter_definition: vec![],
         };
         assert_eq!(
-            (
-                false,
-                "Region type must be specified in region definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.region_definition.region_type.invalid",
+                "Region type must be specified in region definition."
             ),
             validate_region_definition(invalid_type_region_definition)
         );
@@ -2087,9 +2170,9 @@ mod registration_validation_tests {
             class_filter_definition: vec![],
         };
         assert_eq!(
-            (
-                false,
-                "Region type must be specified in region definition.".to_string()
+            ValidationOutcome::fail(
+                "registration.region_definition.region_type.empty",
+                "Region type must be specified in region definition."
             ),
             validate_region_definition(invalid_type_region_definition)
         );
@@ -2112,9 +2195,9 @@ mod registration_validation_tests {
             class_filter_definition: vec![],
         };
         assert_eq!(
-            (
-                false,
-                "Datum must be specified in location type.".to_string()
+            ValidationOutcome::fail(
+                "registration.location_type.datum.invalid",
+                "Datum must be specified in location type."
             ),
             validate_region_definition(invalid_area_region_definition)
         );
@@ -2124,12 +2207,18 @@ mod registration_validation_tests {
     #[test]
     fn test_mode_type_validation() {
         assert_eq!(
-            (false, "Mode type must be specified.".to_string()),
+            ValidationOutcome::fail(
+                "registration.mode_definition.mode_type.missing",
+                "Mode type must be specified."
+            ),
             validate_mode_type(Some(0))
         );
 
         for mode_type in 1..2 {
-            assert_eq!((true, "".to_string()), validate_mode_type(Some(mode_type)))
+            assert_eq!(
+                ValidationOutcome::pass(),
+                validate_mode_type(Some(mode_type))
+            )
         }
     }
 }

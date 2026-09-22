@@ -1,51 +1,61 @@
 use crate::bsi_flex_335_v2_0::Error;
+use crate::finding::ValidationOutcome;
 
 /// Function to validation a SAPIENT error message
-pub fn validate_error(error: Error) -> (bool, String) {
+pub fn validate_error(error: Error) -> ValidationOutcome {
     let validations = vec![
         validate_packet(error.packet),
         validate_error_message(error.error_message),
     ];
 
     for validation in validations {
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check a packet as specified in the SAPIENT version 7 ICD
-fn validate_packet(packet: Option<Vec<u8>>) -> (bool, String) {
+fn validate_packet(packet: Option<Vec<u8>>) -> ValidationOutcome {
     match packet {
         Some(data) => {
             if data.is_empty() {
-                return (false, "Error must contain a populated packet.".to_string());
+                return ValidationOutcome::fail(
+                    "error.packet.empty",
+                    "Error must contain a populated packet.",
+                );
             }
         }
-        None => return (false, "Error must contain a populated packet.".to_string()),
+        None => {
+            return ValidationOutcome::fail(
+                "error.packet.missing",
+                "Error must contain a populated packet.",
+            );
+        }
     };
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check an error message as specified in the SAPIENT version 7 ICD
-fn validate_error_message(error_message: Vec<String>) -> (bool, String) {
+fn validate_error_message(error_message: Vec<String>) -> ValidationOutcome {
     if error_message.is_empty() || error_message.contains(&"".to_string()) {
-        return (
-            false,
-            "Error must contain a populated error message.".to_string(),
+        return ValidationOutcome::fail(
+            "error.error_message.empty",
+            "Error must contain a populated error message.",
         );
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 #[cfg(test)]
 mod error_validation_tests {
     use crate::{
         bsi_flex_335_v2_0::Error,
+        finding::ValidationOutcome,
         validation::error::{validate_error, validate_error_message, validate_packet},
     };
 
@@ -57,7 +67,7 @@ mod error_validation_tests {
             packet: Some(vec![1, 2, 3]),
             error_message: vec!["Invalid SAPIENT message".to_string()],
         };
-        assert_eq!((true, "".to_string()), validate_error(valid_error));
+        assert_eq!(ValidationOutcome::pass(), validate_error(valid_error));
 
         // invalid error
         let invalid_error = Error {
@@ -65,7 +75,10 @@ mod error_validation_tests {
             error_message: vec!["Invalid SAPIENT message".to_string()],
         };
         assert_eq!(
-            (false, "Error must contain a populated packet.".to_string()),
+            ValidationOutcome::fail(
+                "error.packet.missing",
+                "Error must contain a populated packet."
+            ),
             validate_error(invalid_error)
         );
     }
@@ -75,13 +88,28 @@ mod error_validation_tests {
     fn test_packet_validation() {
         // valid packet
         let valid_packet = vec![1, 2, 3];
-        assert_eq!((true, "".to_string()), validate_packet(Some(valid_packet)));
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_packet(Some(valid_packet))
+        );
 
-        // invalid packet
+        // invalid packet (present but empty)
         let invalid_packet = vec![];
         assert_eq!(
-            (false, "Error must contain a populated packet.".to_string()),
+            ValidationOutcome::fail(
+                "error.packet.empty",
+                "Error must contain a populated packet."
+            ),
             validate_packet(Some(invalid_packet))
+        );
+
+        // missing packet
+        assert_eq!(
+            ValidationOutcome::fail(
+                "error.packet.missing",
+                "Error must contain a populated packet."
+            ),
+            validate_packet(None)
         );
     }
 
@@ -90,15 +118,15 @@ mod error_validation_tests {
     fn test_error_message_validation() {
         // valid message
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_error_message(vec!["Invalid SAPIENT message".to_string()])
         );
 
         // invalid message
         assert_eq!(
-            (
-                false,
-                "Error must contain a populated error message.".to_string()
+            ValidationOutcome::fail(
+                "error.error_message.empty",
+                "Error must contain a populated error message."
             ),
             validate_error_message(vec![])
         );

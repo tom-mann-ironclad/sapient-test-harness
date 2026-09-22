@@ -1,22 +1,24 @@
 use crate::bsi_flex_335_v2_0::RegistrationAck;
+use crate::finding::ValidationOutcome;
 
 /// Function to validation a SAPIENT registration acknowledgement message
-pub fn validate_registration_ack(registration_ack: RegistrationAck) -> (bool, String) {
+pub fn validate_registration_ack(registration_ack: RegistrationAck) -> ValidationOutcome {
     validate_acceptance(registration_ack.acceptance)
 }
 
-fn validate_acceptance(acceptance: Option<bool>) -> (bool, String) {
+fn validate_acceptance(acceptance: Option<bool>) -> ValidationOutcome {
     match acceptance {
-        Some(_) => (true, "".to_string()),
-        None => (
-            false,
-            "Acceptance must be specified in a registration ack message.".to_string(),
+        Some(_) => ValidationOutcome::pass(),
+        None => ValidationOutcome::fail(
+            "registration_ack.acceptance.missing",
+            "Acceptance must be specified in a registration ack message.",
         ),
     }
 }
 
 #[cfg(test)]
 mod registration_validation_tests {
+    use crate::finding::ValidationOutcome;
     use crate::validation::registration_ack::*;
 
     /// Unit test to check that registration acknowledgements are correctly validated
@@ -27,7 +29,7 @@ mod registration_validation_tests {
             ack_response_reason: vec![],
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_registration_ack(accepted_registration_ack)
         );
 
@@ -36,7 +38,7 @@ mod registration_validation_tests {
             ack_response_reason: vec!["unsupported mode".to_string()],
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_registration_ack(rejected_registration_ack)
         );
 
@@ -45,9 +47,9 @@ mod registration_validation_tests {
             ack_response_reason: vec![],
         };
         assert_eq!(
-            (
-                false,
-                "Acceptance must be specified in a registration ack message.".to_string()
+            ValidationOutcome::fail(
+                "registration_ack.acceptance.missing",
+                "Acceptance must be specified in a registration ack message."
             ),
             validate_registration_ack(invalid_registration_ack)
         );
@@ -55,12 +57,12 @@ mod registration_validation_tests {
 
     #[test]
     fn test_acceptance_validation() {
-        assert_eq!((true, "".to_string()), validate_acceptance(Some(true)));
-        assert_eq!((true, "".to_string()), validate_acceptance(Some(false)));
+        assert_eq!(ValidationOutcome::pass(), validate_acceptance(Some(true)));
+        assert_eq!(ValidationOutcome::pass(), validate_acceptance(Some(false)));
         assert_eq!(
-            (
-                false,
-                "Acceptance must be specified in a registration ack message.".to_string()
+            ValidationOutcome::fail(
+                "registration_ack.acceptance.missing",
+                "Acceptance must be specified in a registration ack message."
             ),
             validate_acceptance(None)
         );

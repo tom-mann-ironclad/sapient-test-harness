@@ -1,26 +1,30 @@
 use crate::bsi_flex_335_v2_0::{Alert, alert::LocationOneof};
+use crate::finding::ValidationOutcome;
 use crate::validation::common::{
     validate_associated_detection, validate_associated_file, validate_location,
     validate_range_bearing, validate_ulid, validate_unit_interval,
 };
 
 /// Function to validation a SAPIENT alert message
-pub fn validate_alert(alert: Alert) -> (bool, String) {
+pub fn validate_alert(alert: Alert) -> ValidationOutcome {
     let mut validations = vec![validate_alert_id(alert.alert_id)];
 
     if alert.region_id.is_some() {
         validations.push(validate_ulid(
             alert.region_id.as_deref(),
+            "alert.region_id.invalid",
             "A valid ULID must be used for a region ID in an alert message.",
         ));
     }
 
     validations.push(validate_unit_interval(
         alert.ranking,
+        "alert.ranking.invalid",
         "Alert ranking must be between 0.0 and 1.0.",
     ));
     validations.push(validate_unit_interval(
         alert.confidence,
+        "alert.confidence.invalid",
         "Alert confidence must be between 0.0 and 1.0.",
     ));
 
@@ -31,6 +35,7 @@ pub fn validate_alert(alert: Alert) -> (bool, String) {
     for associated_file in alert.associated_file {
         validations.push(validate_associated_file(
             associated_file,
+            "alert.associated_file",
             "Associated file type must be specified in an alert message.",
             "Associated file URL must be specified in an alert message.",
         ));
@@ -39,32 +44,36 @@ pub fn validate_alert(alert: Alert) -> (bool, String) {
     for associated_detection in alert.associated_detection {
         validations.push(validate_associated_detection(
             associated_detection,
+            "alert.associated_detection",
             "A valid UUID v4 must be used for a node ID in an alert associated detection.",
             "A valid ULID must be used for an object ID in an alert associated detection.",
         ));
     }
 
     for validation in validations {
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check a alert ID as specified in the SAPIENT version 7 ICD
-fn validate_alert_id(alert_id: Option<String>) -> (bool, String) {
+fn validate_alert_id(alert_id: Option<String>) -> ValidationOutcome {
     validate_ulid(
         alert_id.as_deref(),
+        "alert.alert_id.invalid",
         "A valid ULID must be used for an alert ID in an alert message.",
     )
 }
 
-fn validate_location_oneof(location_oneof: LocationOneof) -> (bool, String) {
+fn validate_location_oneof(location_oneof: LocationOneof) -> ValidationOutcome {
     match location_oneof {
-        LocationOneof::Location(location) => validate_location(location),
-        LocationOneof::RangeBearing(range_bearing) => validate_range_bearing(range_bearing),
+        LocationOneof::Location(location) => validate_location(location, "alert.location"),
+        LocationOneof::RangeBearing(range_bearing) => {
+            validate_range_bearing(range_bearing, "alert.range_bearing")
+        }
     }
 }
 
@@ -72,6 +81,7 @@ fn validate_location_oneof(location_oneof: LocationOneof) -> (bool, String) {
 mod alert_validation_tests {
     use crate::{
         bsi_flex_335_v2_0::{Alert, AssociatedFile, alert::LocationOneof},
+        finding::ValidationOutcome,
         validation::alert::{validate_alert, validate_alert_id},
     };
 
@@ -93,7 +103,7 @@ mod alert_validation_tests {
             additional_information: None,
             location_oneof: None,
         };
-        assert_eq!((true, "".to_string()), validate_alert(valid_alert));
+        assert_eq!(ValidationOutcome::pass(), validate_alert(valid_alert));
 
         // invalid alert
         let invalid_alert_ = Alert {
@@ -111,9 +121,9 @@ mod alert_validation_tests {
             location_oneof: None,
         };
         assert_eq!(
-            (
-                false,
-                "A valid ULID must be used for an alert ID in an alert message.".to_string()
+            ValidationOutcome::fail(
+                "alert.alert_id.invalid",
+                "A valid ULID must be used for an alert ID in an alert message."
             ),
             validate_alert(invalid_alert_)
         );
@@ -136,9 +146,9 @@ mod alert_validation_tests {
             location_oneof: None,
         };
         assert_eq!(
-            (
-                false,
-                "Associated file type must be specified in an alert message.".to_string()
+            ValidationOutcome::fail(
+                "alert.associated_file.type.missing",
+                "Associated file type must be specified in an alert message."
             ),
             validate_alert(invalid_file_alert)
         );
@@ -169,7 +179,10 @@ mod alert_validation_tests {
                 },
             )),
         };
-        assert_eq!((true, "".to_string()), validate_alert(valid_location_alert));
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_alert(valid_location_alert)
+        );
     }
 
     /// Unit test to check that alert IDs are correctly validated
@@ -178,16 +191,16 @@ mod alert_validation_tests {
         // valid alert ID
         let valid_alert_id = "01H1VV3VN40RV97CDFSXJB44K9".to_string();
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_alert_id(Some(valid_alert_id))
         );
 
         // invalid alert ID
         let invalid_alert_id = "".to_string();
         assert_eq!(
-            (
-                false,
-                "A valid ULID must be used for an alert ID in an alert message.".to_string()
+            ValidationOutcome::fail(
+                "alert.alert_id.invalid",
+                "A valid ULID must be used for an alert ID in an alert message."
             ),
             validate_alert_id(Some(invalid_alert_id))
         );

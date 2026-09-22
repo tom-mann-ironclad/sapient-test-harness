@@ -2,6 +2,7 @@ use crate::bsi_flex_335_v2_0::{
     LocationOrRangeBearing, StatusReport,
     status_report::{Power, Status},
 };
+use crate::finding::ValidationOutcome;
 use crate::validation::common::{
     validate_location,
     validate_location_or_range_bearing as validate_common_location_or_range_bearing,
@@ -9,7 +10,7 @@ use crate::validation::common::{
 };
 
 /// Function to validation a SAPIENT status report message
-pub fn validate_status_report(status_report: StatusReport) -> (bool, String) {
+pub fn validate_status_report(status_report: StatusReport) -> ValidationOutcome {
     let mut validations = vec![];
 
     // Check report ID
@@ -25,6 +26,7 @@ pub fn validate_status_report(status_report: StatusReport) -> (bool, String) {
     if status_report.active_task_id.is_some() {
         validations.push(validate_ulid(
             status_report.active_task_id.as_deref(),
+            "status_report.active_task_id.invalid",
             "A valid ULID must be used for an active task ID in a status report.",
         ));
     }
@@ -34,7 +36,10 @@ pub fn validate_status_report(status_report: StatusReport) -> (bool, String) {
 
     // Check node location if provided
     if let Some(node_location) = status_report.node_location {
-        validations.push(validate_location(node_location));
+        validations.push(validate_location(
+            node_location,
+            "status_report.node_location",
+        ));
     }
 
     if let Some(power) = status_report.power {
@@ -43,15 +48,24 @@ pub fn validate_status_report(status_report: StatusReport) -> (bool, String) {
 
     // Check field of view if provided
     if let Some(field_of_view) = status_report.field_of_view {
-        validations.push(validate_location_or_range_bearing(field_of_view));
+        validations.push(validate_location_or_range_bearing(
+            field_of_view,
+            "status_report.field_of_view",
+        ));
     }
 
     for coverage in status_report.coverage {
-        validations.push(validate_location_or_range_bearing(coverage));
+        validations.push(validate_location_or_range_bearing(
+            coverage,
+            "status_report.coverage",
+        ));
     }
 
     for obscuration in status_report.obscuration {
-        validations.push(validate_location_or_range_bearing(obscuration));
+        validations.push(validate_location_or_range_bearing(
+            obscuration,
+            "status_report.obscuration",
+        ));
     }
 
     for status in status_report.status {
@@ -59,18 +73,19 @@ pub fn validate_status_report(status_report: StatusReport) -> (bool, String) {
     }
 
     for validation in validations {
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check a report ID as specified in the SAPIENT version 7 ICD
-fn validate_report_id(report_id: Option<String>) -> (bool, String) {
+fn validate_report_id(report_id: Option<String>) -> ValidationOutcome {
     validate_ulid(
         report_id.as_deref(),
+        "status_report.report_id.invalid",
         "A valid ULID must be used for a report ID in a status report.",
     )
 }
@@ -79,18 +94,18 @@ fn validate_report_id(report_id: Option<String>) -> (bool, String) {
 /// `System` value 4 is `reserved` in `status_report.proto` (withdrawn after
 /// SAPIENT v7 as not well-defined) -- still a legal `int32` on the wire, so
 /// it must be explicitly excluded rather than just checked for nonzero.
-fn validate_system(system: Option<i32>) -> (bool, String) {
+fn validate_system(system: Option<i32>) -> ValidationOutcome {
     match system {
-        Some(v) if [1, 2, 3, 5].contains(&v) => (true, String::new()),
-        _ => (
-            false,
-            "System must be specified in status report.".to_string(),
+        Some(v) if [1, 2, 3, 5].contains(&v) => ValidationOutcome::pass(),
+        _ => ValidationOutcome::fail(
+            "status_report.system.invalid",
+            "System must be specified in status report.",
         ),
     }
 }
 
 /// Function to check a info as specified in the SAPIENT version 7 ICD
-fn validate_info(info: Option<i32>) -> (bool, String) {
+fn validate_info(info: Option<i32>) -> ValidationOutcome {
     let valid_info = match info {
         Some(0) => false,
         Some(1) => true,
@@ -98,34 +113,41 @@ fn validate_info(info: Option<i32>) -> (bool, String) {
         _ => false,
     };
     if !valid_info {
-        return (
-            false,
-            "Info must be specified in status report.".to_string(),
+        return ValidationOutcome::fail(
+            "status_report.info.invalid",
+            "Info must be specified in status report.",
         );
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_mode(mode: Option<String>) -> (bool, String) {
-    validate_required_string(mode.as_deref(), "Mode must be specified in status report.")
+fn validate_mode(mode: Option<String>) -> ValidationOutcome {
+    validate_required_string(
+        mode.as_deref(),
+        "status_report.mode.missing",
+        "Mode must be specified in status report.",
+    )
 }
 
 fn validate_location_or_range_bearing(
     location_or_range_bearing: LocationOrRangeBearing,
-) -> (bool, String) {
+    rule_id_prefix: &str,
+) -> ValidationOutcome {
     validate_common_location_or_range_bearing(
         location_or_range_bearing,
+        rule_id_prefix,
         "Location or range-bearing must be specified in status report.",
     )
 }
 
-fn validate_status(status: Status) -> (bool, String) {
+fn validate_status(status: Status) -> ValidationOutcome {
     let status_type_validation = validate_required_nonzero(
         status.status_type,
+        "status_report.status.status_type.missing",
         "Status type must be specified in status report.",
     );
-    if !status_type_validation.0 {
+    if !status_type_validation.passed {
         return status_type_validation;
     }
 
@@ -136,20 +158,20 @@ fn validate_status(status: Status) -> (bool, String) {
 /// (`STATUS_LEVEL_SENSOR_STATUS`, withdrawn) -- still a legal `int32` on
 /// the wire. `status_level` itself is optional, so `None` is fine, but a
 /// present value must be one of the currently-defined ones.
-fn validate_status_level(status_level: Option<i32>) -> (bool, String) {
+fn validate_status_level(status_level: Option<i32>) -> ValidationOutcome {
     match status_level {
-        None => (true, String::new()),
-        Some(v) if [2, 3, 4].contains(&v) => (true, String::new()),
-        Some(_) => (
-            false,
-            "Status level is not a valid option in status report.".to_string(),
+        None => ValidationOutcome::pass(),
+        Some(v) if [2, 3, 4].contains(&v) => ValidationOutcome::pass(),
+        Some(_) => ValidationOutcome::fail(
+            "status_report.status.status_level.invalid",
+            "Status level is not a valid option in status report.",
         ),
     }
 }
 
-fn validate_power(power: Power) -> (bool, String) {
+fn validate_power(power: Power) -> ValidationOutcome {
     let _ = power;
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 #[cfg(test)]
@@ -160,6 +182,7 @@ mod status_report_validation_tests {
             location_or_range_bearing::FovOneof,
             status_report::{Power, Status},
         },
+        finding::ValidationOutcome,
         validation::status_report::{
             validate_info, validate_mode, validate_report_id, validate_status,
             validate_status_report, validate_system,
@@ -212,7 +235,7 @@ mod status_report_validation_tests {
             }],
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_status_report(valid_status_report)
         );
 
@@ -231,9 +254,9 @@ mod status_report_validation_tests {
             status: vec![],
         };
         assert_eq!(
-            (
-                false,
-                "A valid ULID must be used for a report ID in a status report.".to_string()
+            ValidationOutcome::fail(
+                "status_report.report_id.invalid",
+                "A valid ULID must be used for a report ID in a status report."
             ),
             validate_status_report(valid_status_report)
         );
@@ -245,16 +268,16 @@ mod status_report_validation_tests {
         // valid report ID
         let valid_report_id = "01H1VV3VN40RV97CDFSXJB44K9".to_string();
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_report_id(Some(valid_report_id))
         );
 
         // invalid report ID
         let invalid_report_id = "".to_string();
         assert_eq!(
-            (
-                false,
-                "A valid ULID must be used for a report ID in a status report.".to_string()
+            ValidationOutcome::fail(
+                "status_report.report_id.invalid",
+                "A valid ULID must be used for a report ID in a status report."
             ),
             validate_report_id(Some(invalid_report_id))
         );
@@ -266,14 +289,14 @@ mod status_report_validation_tests {
     #[test]
     fn test_system_validation() {
         for i in [1, 2, 3, 5] {
-            assert_eq!((true, "".to_string()), validate_system(Some(i)));
+            assert_eq!(ValidationOutcome::pass(), validate_system(Some(i)));
         }
 
         for i in [0, 4] {
             assert_eq!(
-                (
-                    false,
-                    "System must be specified in status report.".to_string()
+                ValidationOutcome::fail(
+                    "status_report.system.invalid",
+                    "System must be specified in status report."
                 ),
                 validate_system(Some(i))
             );
@@ -283,13 +306,13 @@ mod status_report_validation_tests {
     #[test]
     fn test_mode_validation() {
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_mode(Some("Default".to_string()))
         );
         assert_eq!(
-            (
-                false,
-                "Mode must be specified in status report.".to_string()
+            ValidationOutcome::fail(
+                "status_report.mode.missing",
+                "Mode must be specified in status report."
             ),
             validate_mode(None)
         );
@@ -299,28 +322,28 @@ mod status_report_validation_tests {
     #[test]
     fn test_info_validation() {
         // valid info
-        assert_eq!((true, "".to_string()), validate_info(Some(1)));
-        assert_eq!((true, "".to_string()), validate_info(Some(2)));
+        assert_eq!(ValidationOutcome::pass(), validate_info(Some(1)));
+        assert_eq!(ValidationOutcome::pass(), validate_info(Some(2)));
 
         // invalid info
         assert_eq!(
-            (
-                false,
-                "Info must be specified in status report.".to_string()
+            ValidationOutcome::fail(
+                "status_report.info.invalid",
+                "Info must be specified in status report."
             ),
             validate_info(None)
         );
         assert_eq!(
-            (
-                false,
-                "Info must be specified in status report.".to_string()
+            ValidationOutcome::fail(
+                "status_report.info.invalid",
+                "Info must be specified in status report."
             ),
             validate_info(Some(0))
         );
         assert_eq!(
-            (
-                false,
-                "Info must be specified in status report.".to_string()
+            ValidationOutcome::fail(
+                "status_report.info.invalid",
+                "Info must be specified in status report."
             ),
             validate_info(Some(3))
         );
@@ -329,7 +352,7 @@ mod status_report_validation_tests {
     #[test]
     fn test_status_entry_validation() {
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_status(Status {
                 status_level: Some(2),
                 status_value: Some("clear".to_string()),
@@ -337,9 +360,9 @@ mod status_report_validation_tests {
             })
         );
         assert_eq!(
-            (
-                false,
-                "Status type must be specified in status report.".to_string()
+            ValidationOutcome::fail(
+                "status_report.status.status_type.missing",
+                "Status type must be specified in status report."
             ),
             validate_status(Status {
                 status_level: Some(2),
@@ -350,7 +373,7 @@ mod status_report_validation_tests {
 
         // status_level is optional -- absent is fine
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_status(Status {
                 status_level: None,
                 status_value: Some("clear".to_string()),
@@ -362,9 +385,9 @@ mod status_report_validation_tests {
         // rejected when present, not just 0
         for level in [0, 1] {
             assert_eq!(
-                (
-                    false,
-                    "Status level is not a valid option in status report.".to_string()
+                ValidationOutcome::fail(
+                    "status_report.status.status_level.invalid",
+                    "Status level is not a valid option in status report."
                 ),
                 validate_status(Status {
                     status_level: Some(level),
@@ -395,7 +418,7 @@ mod status_report_validation_tests {
             status: vec![],
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_status_report(status_report.clone())
         );
 
@@ -405,7 +428,7 @@ mod status_report_validation_tests {
             status: 0,
         });
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_status_report(status_report)
         );
     }

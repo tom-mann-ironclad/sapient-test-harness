@@ -5,6 +5,7 @@ use crate::bsi_flex_335_v2_0::{
         command::Command as TaskCommand,
     },
 };
+use crate::finding::ValidationOutcome;
 use crate::validation::common::{
     validate_follow_object, validate_location_list,
     validate_location_or_range_bearing as validate_common_location_or_range_bearing,
@@ -12,7 +13,7 @@ use crate::validation::common::{
 };
 
 /// Function to validation a SAPIENT task message
-pub fn validate_task(task: Task) -> (bool, String) {
+pub fn validate_task(task: Task) -> ValidationOutcome {
     let mut validations = vec![];
 
     // Check task ID
@@ -30,234 +31,259 @@ pub fn validate_task(task: Task) -> (bool, String) {
     }
 
     for validation in validations {
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_command(command: Command) -> (bool, String) {
+fn validate_command(command: Command) -> ValidationOutcome {
     let command = match command.command {
         Some(command) => command,
-        None => return (false, "Task command must be specified.".to_string()),
+        None => {
+            return ValidationOutcome::fail(
+                "task.command.missing",
+                "Task command must be specified.",
+            );
+        }
     };
 
     match command {
         TaskCommand::Request(request) | TaskCommand::ModeChange(request) => {
             if request.is_empty() {
-                return (false, "Task command must be populated.".to_string());
+                return ValidationOutcome::fail(
+                    "task.command.value.empty",
+                    "Task command must be populated.",
+                );
             }
         }
         TaskCommand::DetectionThreshold(level)
         | TaskCommand::DetectionReportRate(level)
         | TaskCommand::ClassificationThreshold(level) => {
             if !(1..=3).contains(&level) {
-                return (false, "Task threshold must be specified.".to_string());
+                return ValidationOutcome::fail(
+                    "task.command.threshold.invalid",
+                    "Task threshold must be specified.",
+                );
             }
         }
         TaskCommand::LookAt(location_or_range_bearing) => {
-            let validation = validate_location_or_range_bearing(location_or_range_bearing);
-            if !validation.0 {
+            let validation = validate_location_or_range_bearing(
+                location_or_range_bearing,
+                "task.command.look_at",
+            );
+            if !validation.passed {
                 return validation;
             }
         }
         TaskCommand::MoveTo(location_list) | TaskCommand::Patrol(location_list) => {
-            let validation = validate_location_list(location_list);
-            if !validation.0 {
+            let validation = validate_location_list(location_list, "task.command.location_list");
+            if !validation.passed {
                 return validation;
             }
         }
         TaskCommand::Follow(follow_object) => {
             let validation = validate_follow_object(follow_object);
-            if !validation.0 {
+            if !validation.passed {
                 return validation;
             }
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_region(region: Region) -> (bool, String) {
+fn validate_region(region: Region) -> ValidationOutcome {
     let region_type_validation = validate_required_nonzero(
         region.r#type,
+        "task.region.type.missing",
         "Region type must be specified in task message.",
     );
-    if !region_type_validation.0 {
+    if !region_type_validation.passed {
         return region_type_validation;
     }
 
     let region_id_validation = validate_ulid(
         region.region_id.as_deref(),
+        "task.region.region_id.invalid",
         "A valid ULID must be used for a region ID in a task message.",
     );
-    if !region_id_validation.0 {
+    if !region_id_validation.passed {
         return region_id_validation;
     }
 
     let region_name_validation = validate_required_string(
         region.region_name.as_deref(),
+        "task.region.region_name.missing",
         "Region name must be specified in task message.",
     );
-    if !region_name_validation.0 {
+    if !region_name_validation.passed {
         return region_name_validation;
     }
 
     let region_area = match region.region_area {
         Some(region_area) => region_area,
         None => {
-            return (
-                false,
-                "Region area must be specified in task message.".to_string(),
+            return ValidationOutcome::fail(
+                "task.region.region_area.missing",
+                "Region area must be specified in task message.",
             );
         }
     };
-    let region_area_validation = validate_location_or_range_bearing(region_area);
-    if !region_area_validation.0 {
+    let region_area_validation =
+        validate_location_or_range_bearing(region_area, "task.region.region_area");
+    if !region_area_validation.passed {
         return region_area_validation;
     }
 
     for class_filter in region.class_filter {
         let validation = validate_class_filter(class_filter);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
     for behaviour_filter in region.behaviour_filter {
         let validation = validate_behaviour_filter(behaviour_filter);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 fn validate_location_or_range_bearing(
     location_or_range_bearing: LocationOrRangeBearing,
-) -> (bool, String) {
+    rule_id_prefix: &str,
+) -> ValidationOutcome {
     validate_common_location_or_range_bearing(
         location_or_range_bearing,
+        rule_id_prefix,
         "Location or range-bearing must be specified in task message.",
     )
 }
 
-fn validate_class_filter(class_filter: ClassFilter) -> (bool, String) {
+fn validate_class_filter(class_filter: ClassFilter) -> ValidationOutcome {
     let parameter = match class_filter.parameter {
         Some(parameter) => parameter,
         None => {
-            return (
-                false,
-                "Parameter must be specified in class filter.".to_string(),
+            return ValidationOutcome::fail(
+                "task.class_filter.parameter.missing",
+                "Parameter must be specified in class filter.",
             );
         }
     };
 
-    let parameter_validation = validate_parameter(parameter);
-    if !parameter_validation.0 {
+    let parameter_validation = validate_parameter(parameter, "task.class_filter.parameter");
+    if !parameter_validation.passed {
         return parameter_validation;
     }
 
     let type_validation = validate_required_string(
         class_filter.r#type.as_deref(),
+        "task.class_filter.type.missing",
         "Type must be specified in class filter.",
     );
-    if !type_validation.0 {
+    if !type_validation.passed {
         return type_validation;
     }
 
     for sub_class_filter in class_filter.sub_class_filter {
         let validation = validate_sub_class_filter(sub_class_filter);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_sub_class_filter(sub_class_filter: SubClassFilter) -> (bool, String) {
+fn validate_sub_class_filter(sub_class_filter: SubClassFilter) -> ValidationOutcome {
     let parameter = match sub_class_filter.parameter {
         Some(parameter) => parameter,
         None => {
-            return (
-                false,
-                "Parameter must be specified in sub class filter.".to_string(),
+            return ValidationOutcome::fail(
+                "task.sub_class_filter.parameter.missing",
+                "Parameter must be specified in sub class filter.",
             );
         }
     };
 
-    let parameter_validation = validate_parameter(parameter);
-    if !parameter_validation.0 {
+    let parameter_validation = validate_parameter(parameter, "task.sub_class_filter.parameter");
+    if !parameter_validation.passed {
         return parameter_validation;
     }
 
     let type_validation = validate_required_string(
         sub_class_filter.r#type.as_deref(),
+        "task.sub_class_filter.type.missing",
         "Type must be specified in sub class filter.",
     );
-    if !type_validation.0 {
+    if !type_validation.passed {
         return type_validation;
     }
 
     for nested_sub_class_filter in sub_class_filter.sub_class_filter {
         let validation = validate_sub_class_filter(nested_sub_class_filter);
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
-fn validate_behaviour_filter(behaviour_filter: BehaviourFilter) -> (bool, String) {
+fn validate_behaviour_filter(behaviour_filter: BehaviourFilter) -> ValidationOutcome {
     let parameter = match behaviour_filter.parameter {
         Some(parameter) => parameter,
         None => {
-            return (
-                false,
-                "Parameter must be specified in behaviour filter.".to_string(),
+            return ValidationOutcome::fail(
+                "task.behaviour_filter.parameter.missing",
+                "Parameter must be specified in behaviour filter.",
             );
         }
     };
 
-    let parameter_validation = validate_parameter(parameter);
-    if !parameter_validation.0 {
-        return parameter_validation;
-    }
-
-    (true, "".to_string())
+    validate_parameter(parameter, "task.behaviour_filter.parameter")
 }
 
-fn validate_parameter(parameter: Parameter) -> (bool, String) {
+fn validate_parameter(parameter: Parameter, rule_id_prefix: &str) -> ValidationOutcome {
     let name_validation = validate_required_string(
         parameter.name.as_deref(),
+        format!("{rule_id_prefix}.name.missing"),
         "Parameter name must be specified.",
     );
-    if !name_validation.0 {
+    if !name_validation.passed {
         return name_validation;
     }
 
-    let operator_validation =
-        validate_required_nonzero(parameter.operator, "Parameter operator must be specified.");
-    if !operator_validation.0 {
+    let operator_validation = validate_required_nonzero(
+        parameter.operator,
+        format!("{rule_id_prefix}.operator.missing"),
+        "Parameter operator must be specified.",
+    );
+    if !operator_validation.passed {
         return operator_validation;
     }
 
     if parameter.value.is_none() {
-        return (false, "Parameter value must be specified.".to_string());
+        return ValidationOutcome::fail(
+            format!("{rule_id_prefix}.value.missing"),
+            "Parameter value must be specified.",
+        );
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check a task ID as specified in the SAPIENT version 7 ICD
-fn validate_task_id(task_id: Option<String>) -> (bool, String) {
+fn validate_task_id(task_id: Option<String>) -> ValidationOutcome {
     validate_ulid(
         task_id.as_deref(),
+        "task.task_id.invalid",
         "A valid ULID must be used for a task ID in a task message.",
     )
 }
@@ -269,7 +295,7 @@ fn validate_task_id(task_id: Option<String>) -> (bool, String) {
 /// The legacy reference validator (`TaskValidator.cs`) rejects it via
 /// FluentValidation's `.IsInEnum()`, which only accepts values present as
 /// actual enum members in the generated C# type.
-fn validate_control(control: Option<i32>) -> (bool, String) {
+fn validate_control(control: Option<i32>) -> ValidationOutcome {
     let valid_control = match control {
         None | Some(0) => false,
         Some(1) => true,
@@ -278,13 +304,13 @@ fn validate_control(control: Option<i32>) -> (bool, String) {
         _ => false,
     };
     if !valid_control {
-        return (
-            false,
-            "Control must be specified in a task message.".to_string(),
+        return ValidationOutcome::fail(
+            "task.control.invalid",
+            "Control must be specified in a task message.",
         );
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 #[cfg(test)]
@@ -298,6 +324,7 @@ mod task_validation_tests {
                 command::Command::{Follow, Request},
             },
         },
+        finding::ValidationOutcome,
         validation::task::{validate_control, validate_task, validate_task_id},
     };
 
@@ -320,7 +347,7 @@ mod task_validation_tests {
             region: vec![],
             command: Some(valid_command.clone()),
         };
-        assert_eq!((true, "".to_string()), validate_task(valid_task));
+        assert_eq!(ValidationOutcome::pass(), validate_task(valid_task));
 
         // invalid task
         let invalid_task = Task {
@@ -334,9 +361,9 @@ mod task_validation_tests {
             command: Some(valid_command.clone()),
         };
         assert_eq!(
-            (
-                false,
-                "A valid ULID must be used for a task ID in a task message.".to_string()
+            ValidationOutcome::fail(
+                "task.task_id.invalid",
+                "A valid ULID must be used for a task ID in a task message."
             ),
             validate_task(invalid_task)
         );
@@ -352,7 +379,7 @@ mod task_validation_tests {
             region: vec![],
             command: None,
         };
-        assert_eq!((true, "".to_string()), validate_task(empty_task));
+        assert_eq!(ValidationOutcome::pass(), validate_task(empty_task));
 
         let follow_command = Command {
             command_parameter: None,
@@ -371,10 +398,9 @@ mod task_validation_tests {
             command: Some(follow_command),
         };
         assert_eq!(
-            (
-                false,
+            ValidationOutcome::fail(
+                "task.follow_object.follow_object_id.invalid",
                 "A valid ULID must be used for a follow object ID in a follow object message."
-                    .to_string()
             ),
             validate_task(invalid_follow_task)
         );
@@ -436,7 +462,7 @@ mod task_validation_tests {
             }],
             command: None,
         };
-        assert_eq!((true, "".to_string()), validate_task(region_task));
+        assert_eq!(ValidationOutcome::pass(), validate_task(region_task));
     }
 
     /// Unit test to check that task IDs are correctly validated
@@ -445,16 +471,16 @@ mod task_validation_tests {
         // valid task ID
         let valid_task_id = "01H1VV3VN40RV97CDFSXJB44K9".to_string();
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_task_id(Some(valid_task_id))
         );
 
         // invalid report ID
         let invalid_task_id = "".to_string();
         assert_eq!(
-            (
-                false,
-                "A valid ULID must be used for a task ID in a task message.".to_string()
+            ValidationOutcome::fail(
+                "task.task_id.invalid",
+                "A valid ULID must be used for a task ID in a task message."
             ),
             validate_task_id(Some(invalid_task_id))
         );
@@ -467,15 +493,15 @@ mod task_validation_tests {
     fn test_control_validation() {
         // valid control
         for control in 1..4 {
-            assert_eq!((true, "".to_string()), validate_control(Some(control)));
+            assert_eq!(ValidationOutcome::pass(), validate_control(Some(control)));
         }
 
         // invalid control
         for control in [0, 4, 5] {
             assert_eq!(
-                (
-                    false,
-                    "Control must be specified in a task message.".to_string()
+                ValidationOutcome::fail(
+                    "task.control.invalid",
+                    "Control must be specified in a task message."
                 ),
                 validate_control(Some(control))
             );

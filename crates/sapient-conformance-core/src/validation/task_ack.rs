@@ -1,8 +1,9 @@
 use crate::bsi_flex_335_v2_0::TaskAck;
+use crate::finding::ValidationOutcome;
 use crate::validation::common::{validate_associated_file, validate_ulid};
 
 /// Function to validation a SAPIENT task acknowledgement message
-pub fn validate_task_ack(task_ack: TaskAck) -> (bool, String) {
+pub fn validate_task_ack(task_ack: TaskAck) -> ValidationOutcome {
     let mut validations = vec![];
 
     // Check task ID
@@ -14,30 +15,32 @@ pub fn validate_task_ack(task_ack: TaskAck) -> (bool, String) {
     if let Some(associated_file) = task_ack.associated_file {
         validations.push(validate_associated_file(
             associated_file,
+            "task_ack.associated_file",
             "Associated file type must be specified in a task ack message.",
             "Associated file URL must be specified in a task ack message.",
         ));
     }
 
     for validation in validations {
-        if !validation.0 {
+        if !validation.passed {
             return validation;
         }
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 /// Function to check a task ID as specified in the SAPIENT version 7 ICD
-fn validate_task_id(task_id: Option<String>) -> (bool, String) {
+fn validate_task_id(task_id: Option<String>) -> ValidationOutcome {
     validate_ulid(
         task_id.as_deref(),
+        "task_ack.task_id.invalid",
         "A valid ULID must be used for a task ID in a task ack message.",
     )
 }
 
 /// Function to check a status as specified in the SAPIENT version 7 ICD
-fn validate_status(status: Option<i32>) -> (bool, String) {
+fn validate_status(status: Option<i32>) -> ValidationOutcome {
     let valid_status = match status {
         None | Some(0) => false,
         Some(1) => true,
@@ -47,19 +50,20 @@ fn validate_status(status: Option<i32>) -> (bool, String) {
         _ => false,
     };
     if !valid_status {
-        return (
-            false,
-            "Task status must be specified in a task ack message.".to_string(),
+        return ValidationOutcome::fail(
+            "task_ack.task_status.invalid",
+            "Task status must be specified in a task ack message.",
         );
     }
 
-    (true, "".to_string())
+    ValidationOutcome::pass()
 }
 
 #[cfg(test)]
 mod task_ack_validation_tests {
     use crate::{
         bsi_flex_335_v2_0::{AssociatedFile, TaskAck},
+        finding::ValidationOutcome,
         validation::task_ack::{validate_status, validate_task_ack, validate_task_id},
     };
 
@@ -73,7 +77,7 @@ mod task_ack_validation_tests {
             reason: vec![],
             associated_file: None,
         };
-        assert_eq!((true, "".to_string()), validate_task_ack(valid_task_ack));
+        assert_eq!(ValidationOutcome::pass(), validate_task_ack(valid_task_ack));
 
         // invalid task
         let invalid_task_ack = TaskAck {
@@ -83,9 +87,9 @@ mod task_ack_validation_tests {
             associated_file: None,
         };
         assert_eq!(
-            (
-                false,
-                "A valid ULID must be used for a task ID in a task ack message.".to_string()
+            ValidationOutcome::fail(
+                "task_ack.task_id.invalid",
+                "A valid ULID must be used for a task ID in a task ack message."
             ),
             validate_task_ack(invalid_task_ack)
         );
@@ -100,9 +104,9 @@ mod task_ack_validation_tests {
             }),
         };
         assert_eq!(
-            (
-                false,
-                "Associated file type must be specified in a task ack message.".to_string()
+            ValidationOutcome::fail(
+                "task_ack.associated_file.type.missing",
+                "Associated file type must be specified in a task ack message."
             ),
             validate_task_ack(invalid_file_task_ack)
         );
@@ -114,16 +118,16 @@ mod task_ack_validation_tests {
         // valid task ID
         let valid_task_id = "01H1VV3VN40RV97CDFSXJB44K9".to_string();
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_task_id(Some(valid_task_id))
         );
 
         // invalid report ID
         let invalid_task_id = "".to_string();
         assert_eq!(
-            (
-                false,
-                "A valid ULID must be used for a task ID in a task ack message.".to_string()
+            ValidationOutcome::fail(
+                "task_ack.task_id.invalid",
+                "A valid ULID must be used for a task ID in a task ack message."
             ),
             validate_task_id(Some(invalid_task_id))
         );
@@ -134,21 +138,21 @@ mod task_ack_validation_tests {
     fn test_status_validation() {
         // valid status
         for status in 1..5 {
-            assert_eq!((true, "".to_string()), validate_status(Some(status)));
+            assert_eq!(ValidationOutcome::pass(), validate_status(Some(status)));
         }
 
         // invalid status
         assert_eq!(
-            (
-                false,
-                "Task status must be specified in a task ack message.".to_string()
+            ValidationOutcome::fail(
+                "task_ack.task_status.invalid",
+                "Task status must be specified in a task ack message."
             ),
             validate_status(Some(0))
         );
         assert_eq!(
-            (
-                false,
-                "Task status must be specified in a task ack message.".to_string()
+            ValidationOutcome::fail(
+                "task_ack.task_status.invalid",
+                "Task status must be specified in a task ack message."
             ),
             validate_status(Some(5))
         );

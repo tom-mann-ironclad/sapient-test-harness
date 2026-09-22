@@ -1,4 +1,5 @@
 use crate::bsi_flex_335_v2_0::{SapientMessage, sapient_message::Content};
+use crate::finding::ValidationOutcome;
 use crate::validation::{
     alert::validate_alert,
     alert_ack::validate_alert_ack,
@@ -12,30 +13,34 @@ use crate::validation::{
     task_ack::validate_task_ack,
 };
 
-pub fn validate_sapient_message(message: SapientMessage) -> (bool, String) {
+pub fn validate_sapient_message(message: SapientMessage) -> ValidationOutcome {
     let timestamp_validation = validate_timestamp(
         message.timestamp,
+        "sapient_message.timestamp.missing",
         "Timestamp must be specified in sapient message.",
+        "sapient_message.timestamp.malformed",
         "Timestamp is malformed in sapient message.",
     );
-    if !timestamp_validation.0 {
+    if !timestamp_validation.passed {
         return timestamp_validation;
     }
 
     let node_id_validation = validate_uuid_v4(
         message.node_id.as_deref(),
+        "sapient_message.node_id.invalid",
         "A valid UUID v4 must be used for a node ID in sapient message.",
     );
-    if !node_id_validation.0 {
+    if !node_id_validation.passed {
         return node_id_validation;
     }
 
     if message.destination_id.is_some() {
         let destination_id_validation = validate_uuid_v4(
             message.destination_id.as_deref(),
+            "sapient_message.destination_id.invalid",
             "A valid UUID v4 must be used for a destination ID in sapient message.",
         );
-        if !destination_id_validation.0 {
+        if !destination_id_validation.passed {
             return destination_id_validation;
         }
     }
@@ -43,9 +48,9 @@ pub fn validate_sapient_message(message: SapientMessage) -> (bool, String) {
     let content = match message.content {
         Some(content) => content,
         None => {
-            return (
-                false,
-                "Content must be specified in sapient message.".to_string(),
+            return ValidationOutcome::fail(
+                "sapient_message.content.missing",
+                "Content must be specified in sapient message.",
             );
         }
     };
@@ -76,6 +81,7 @@ mod sapient_message_validation_tests {
         },
         sapient_message::Content,
     };
+    use crate::finding::ValidationOutcome;
 
     use super::validate_sapient_message;
 
@@ -180,7 +186,7 @@ mod sapient_message_validation_tests {
             content: Some(Content::Registration(valid_registration())),
         };
         assert_eq!(
-            (true, "".to_string()),
+            ValidationOutcome::pass(),
             validate_sapient_message(valid_message)
         );
 
@@ -192,9 +198,9 @@ mod sapient_message_validation_tests {
             content: Some(Content::Registration(valid_registration())),
         };
         assert_eq!(
-            (
-                false,
-                "Timestamp must be specified in sapient message.".to_string()
+            ValidationOutcome::fail(
+                "sapient_message.timestamp.missing",
+                "Timestamp must be specified in sapient message."
             ),
             validate_sapient_message(missing_timestamp)
         );
@@ -210,9 +216,9 @@ mod sapient_message_validation_tests {
             content: Some(Content::Registration(valid_registration())),
         };
         assert_eq!(
-            (
-                false,
-                "A valid UUID v4 must be used for a node ID in sapient message.".to_string()
+            ValidationOutcome::fail(
+                "sapient_message.node_id.invalid",
+                "A valid UUID v4 must be used for a node ID in sapient message."
             ),
             validate_sapient_message(invalid_node_id)
         );
@@ -228,9 +234,9 @@ mod sapient_message_validation_tests {
             content: None,
         };
         assert_eq!(
-            (
-                false,
-                "Content must be specified in sapient message.".to_string()
+            ValidationOutcome::fail(
+                "sapient_message.content.missing",
+                "Content must be specified in sapient message."
             ),
             validate_sapient_message(missing_content)
         );
