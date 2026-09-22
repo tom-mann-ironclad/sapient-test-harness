@@ -627,6 +627,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sapient-session"
+version = "0.1.0"
+dependencies = [
+ "prost 0.14.4",
+ "prost-types 0.14.4",
+ "sapient-conformance-core",
+ "sapient-rs",
+ "tokio",
+]
+
+[[package]]
 name = "sapient-test-harness-cli"
 version = "0.1.0"
 dependencies = [

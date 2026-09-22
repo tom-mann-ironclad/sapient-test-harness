@@ -14,6 +14,13 @@ This is a Cargo workspace:
   validators for the BSI Flex 335 v2.0 ICD (`src/validation/`), with no
   CLI or transport dependencies, so the same logic can back a CLI and a
   future hosted service without forking it.
+- `crates/sapient-session` — protocol-level session state machine and
+  role drivers (currently DMM; ASM is a follow-up). `src/state.rs` is a
+  pure, synchronous state machine with no I/O; `src/dmm.rs` is a thin
+  `tokio` driver that owns the actual socket framing and calls into it.
+  Builds on `sapient-conformance-core` for message validation and adds
+  session-level sequencing, timing, and cross-message correlation a
+  single-message validator can't check.
 - `crates/sapient-test-harness-cli` — the `sapient-harness` binary. Just a
   placeholder today; the real binary will be implemented later.
 

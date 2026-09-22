@@ -1,0 +1,18 @@
+[package]
+name = "sapient-session"
+description = "Protocol-level SAPIENT / BSI Flex 335 session state machine and DMM/ASM role drivers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+sapient-rs.workspace = true
+sapient-conformance-core.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
