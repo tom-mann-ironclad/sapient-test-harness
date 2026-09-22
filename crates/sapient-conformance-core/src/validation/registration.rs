@@ -17,8 +17,10 @@ use crate::bsi_flex_335_v2_0::{
     },
 };
 use crate::validation::common::{
+    validate_location_coordinate_system,
     validate_location_or_range_bearing as validate_common_location_or_range_bearing,
-    validate_nonzero, validate_required_nonzero, validate_required_string, validate_uuid_v4,
+    validate_nonzero, validate_range_bearing_coordinate_system, validate_required_nonzero,
+    validate_required_string, validate_uuid_v4,
 };
 
 /// Function to validation a SAPIENT registration message
@@ -401,8 +403,14 @@ fn validate_location_type(location_type: LocationType) -> (bool, String) {
         );
     };
     let valid_units = match location_type.coordinates_oneof.unwrap() {
-        LocationUnits(units) => validate_coordinate_units(units),
-        RangeBearingUnits(units) => validate_coordinate_units(units),
+        LocationUnits(units) => validate_location_coordinate_system(
+            Some(units),
+            "Units must be specified in location type.",
+        ),
+        RangeBearingUnits(units) => validate_range_bearing_coordinate_system(
+            Some(units),
+            "Units must be specified in location type.",
+        ),
     };
     if !valid_units.0 {
         return valid_units;
@@ -424,11 +432,6 @@ fn validate_location_type(location_type: LocationType) -> (bool, String) {
     }
 
     (true, "".to_string())
-}
-
-/// Function to check coordinate units as specified in the BSI Flex 335 V2.0
-fn validate_coordinate_units(units: i32) -> (bool, String) {
-    validate_nonzero(units, "Units must be specified in location type.")
 }
 
 /// Function to check coordinate datum as specified in the BSI Flex 335 V2.0
@@ -770,14 +773,34 @@ fn validate_velocity_type(velocity_type: VelocityType) -> (bool, String) {
     (true, "".to_string())
 }
 
+/// `SpeedUnits` values 3 and 4 are `reserved` in `velocity.proto` (used up
+/// to SAPIENT v7, dropped for non-SI units) -- still legal `int32`s on the
+/// wire, so must be explicitly excluded rather than just checked for
+/// nonzero.
+fn validate_speed_units(value: Option<i32>, error_message: &str) -> (bool, String) {
+    match value {
+        Some(v) if [1, 2].contains(&v) => (true, String::new()),
+        _ => (false, error_message.to_string()),
+    }
+}
+
 fn validate_enu_velocity_units(enu_velocity_units: RegistrationEnuVelocityUnits) -> (bool, String) {
-    if enu_velocity_units.east_north_rate_units.is_none()
-        || enu_velocity_units.east_north_rate_units == Some(0)
-    {
-        return (
-            false,
-            "East/north rate units must be specified in velocity type.".to_string(),
+    let east_north_validation = validate_speed_units(
+        enu_velocity_units.east_north_rate_units,
+        "East/north rate units must be specified in velocity type.",
+    );
+    if !east_north_validation.0 {
+        return east_north_validation;
+    }
+
+    if let Some(up_rate_units) = enu_velocity_units.up_rate_units {
+        let up_rate_validation = validate_speed_units(
+            Some(up_rate_units),
+            "Up rate units is not a valid option in velocity type.",
         );
+        if !up_rate_validation.0 {
+            return up_rate_validation;
+        }
     }
 
     (true, "".to_string())
@@ -921,6 +944,16 @@ fn validate_behaviour_filter_definition(
 fn validate_taxonomy_dock_definition(
     taxonomy_dock_definition: TaxonomyDockDefinition,
 ) -> (bool, String) {
+    match taxonomy_dock_definition.dock_class_namespace.as_deref() {
+        Some("") | None => {
+            return (
+                false,
+                "Taxonomy dock class namespace must be specified.".to_string(),
+            );
+        }
+        Some(_) => {}
+    }
+
     match taxonomy_dock_definition.dock_class.as_deref() {
         Some("") | None => {
             return (false, "Taxonomy dock class must be specified.".to_string());
@@ -1773,22 +1806,62 @@ mod registration_validation_tests {
         // TODO:
     }
 
-    /// Unit test to check that coordinate units are correctly validated
+    /// Unit test to check that location coordinate units are correctly
+    /// validated, including that values 3 and 4 (`reserved` in
+    /// `location.proto` since SAPIENT v7) are rejected, not just 0.
     #[test]
-    fn test_coorindate_units_validation() {
-        // valid units
-        for i in 1..6 {
-            assert_eq!((true, "".to_string()), validate_coordinate_units(i));
+    fn test_location_coorindate_units_validation() {
+        for i in [1, 2, 5] {
+            assert_eq!(
+                (true, "".to_string()),
+                validate_location_coordinate_system(
+                    Some(i),
+                    "Units must be specified in location type."
+                )
+            );
         }
 
-        // invalid units
-        assert_eq!(
-            (
-                false,
-                "Units must be specified in location type.".to_string()
-            ),
-            validate_coordinate_units(0)
-        );
+        for i in [0, 3, 4] {
+            assert_eq!(
+                (
+                    false,
+                    "Units must be specified in location type.".to_string()
+                ),
+                validate_location_coordinate_system(
+                    Some(i),
+                    "Units must be specified in location type."
+                )
+            );
+        }
+    }
+
+    /// Unit test to check that range bearing coordinate units are correctly
+    /// validated, including that values 5 and 6 (`reserved` in
+    /// `range_bearing.proto` since SAPIENT v7) are rejected, not just 0.
+    #[test]
+    fn test_range_bearing_coorindate_units_validation() {
+        for i in [1, 2, 3, 4] {
+            assert_eq!(
+                (true, "".to_string()),
+                validate_range_bearing_coordinate_system(
+                    Some(i),
+                    "Units must be specified in location type."
+                )
+            );
+        }
+
+        for i in [0, 5, 6] {
+            assert_eq!(
+                (
+                    false,
+                    "Units must be specified in location type.".to_string()
+                ),
+                validate_range_bearing_coordinate_system(
+                    Some(i),
+                    "Units must be specified in location type."
+                )
+            );
+        }
     }
 
     /// Unit test to check that coordinate datums are correctly validated
@@ -1806,6 +1879,59 @@ mod registration_validation_tests {
                 "Datum must be specified in location type.".to_string()
             ),
             validate_coordinate_datum(0)
+        );
+    }
+
+    /// Unit test to check that ENU velocity units are correctly validated,
+    /// including that the `reserved` values 3 and 4 (withdrawn
+    /// non-SI `SpeedUnits`) are rejected, not just 0.
+    #[test]
+    fn test_enu_velocity_units_validation() {
+        for i in [1, 2] {
+            assert_eq!(
+                (true, "".to_string()),
+                validate_enu_velocity_units(RegistrationEnuVelocityUnits {
+                    east_north_rate_units: Some(i),
+                    up_rate_units: Some(i),
+                })
+            );
+        }
+
+        // mandatory east/north units missing or invalid
+        for east_north in [None, Some(0), Some(3), Some(4)] {
+            assert_eq!(
+                (
+                    false,
+                    "East/north rate units must be specified in velocity type.".to_string()
+                ),
+                validate_enu_velocity_units(RegistrationEnuVelocityUnits {
+                    east_north_rate_units: east_north,
+                    up_rate_units: None,
+                })
+            );
+        }
+
+        // optional up rate units, when present, must still be valid
+        for up_rate in [Some(0), Some(3), Some(4)] {
+            assert_eq!(
+                (
+                    false,
+                    "Up rate units is not a valid option in velocity type.".to_string()
+                ),
+                validate_enu_velocity_units(RegistrationEnuVelocityUnits {
+                    east_north_rate_units: Some(1),
+                    up_rate_units: up_rate,
+                })
+            );
+        }
+
+        // up rate units is optional -- absent is fine
+        assert_eq!(
+            (true, "".to_string()),
+            validate_enu_velocity_units(RegistrationEnuVelocityUnits {
+                east_north_rate_units: Some(1),
+                up_rate_units: None,
+            })
         );
     }
 

@@ -263,13 +263,18 @@ fn validate_task_id(task_id: Option<String>) -> (bool, String) {
 }
 
 /// Function to check a control as specified in the SAPIENT version 7 ICD
+/// `Control` value 4 (`CONTROL_DEFAULT`) is `reserved` in `task.proto`
+/// ("Default task has been removed as it is not possible to define") --
+/// still a legal `int32` on the wire, so it must be explicitly excluded.
+/// The legacy reference validator (`TaskValidator.cs`) rejects it via
+/// FluentValidation's `.IsInEnum()`, which only accepts values present as
+/// actual enum members in the generated C# type.
 fn validate_control(control: Option<i32>) -> (bool, String) {
     let valid_control = match control {
         None | Some(0) => false,
         Some(1) => true,
         Some(2) => true,
         Some(3) => true,
-        Some(4) => true,
         _ => false,
     };
     if !valid_control {
@@ -455,28 +460,25 @@ mod task_validation_tests {
         );
     }
 
-    /// Unit test to check that controls are correctly validated
+    /// Unit test to check that controls are correctly validated, including
+    /// that the `reserved` value 4 (`CONTROL_DEFAULT`, removed from
+    /// `task.proto`) is rejected, not accepted as a valid control.
     #[test]
     fn test_control_validation() {
         // valid control
-        for control in 1..5 {
+        for control in 1..4 {
             assert_eq!((true, "".to_string()), validate_control(Some(control)));
         }
 
         // invalid control
-        assert_eq!(
-            (
-                false,
-                "Control must be specified in a task message.".to_string()
-            ),
-            validate_control(Some(0))
-        );
-        assert_eq!(
-            (
-                false,
-                "Control must be specified in a task message.".to_string()
-            ),
-            validate_control(Some(5))
-        );
+        for control in [0, 4, 5] {
+            assert_eq!(
+                (
+                    false,
+                    "Control must be specified in a task message.".to_string()
+                ),
+                validate_control(Some(control))
+            );
+        }
     }
 }

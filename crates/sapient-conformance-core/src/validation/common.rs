@@ -87,6 +87,36 @@ pub fn validate_nonzero(value: i32, error_message: &str) -> (bool, String) {
     }
 }
 
+/// `LocationCoordinateSystem` values 3 and 4 are `reserved` in
+/// `location.proto` (used up to SAPIENT v7, dropped for non-SI units) --
+/// they're still valid `int32`s on the wire, so a plain nonzero check
+/// wrongly accepts them. Whitelist the values that are actually defined.
+const VALID_LOCATION_COORDINATE_SYSTEMS: [i32; 3] = [1, 2, 5];
+
+/// Same issue as [`VALID_LOCATION_COORDINATE_SYSTEMS`], for
+/// `RangeBearingCoordinateSystem` (`range_bearing.proto` reserves 5 and 6).
+const VALID_RANGE_BEARING_COORDINATE_SYSTEMS: [i32; 4] = [1, 2, 3, 4];
+
+pub fn validate_location_coordinate_system(
+    value: Option<i32>,
+    error_message: &str,
+) -> (bool, String) {
+    match value {
+        Some(v) if VALID_LOCATION_COORDINATE_SYSTEMS.contains(&v) => (true, String::new()),
+        _ => (false, error_message.to_string()),
+    }
+}
+
+pub fn validate_range_bearing_coordinate_system(
+    value: Option<i32>,
+    error_message: &str,
+) -> (bool, String) {
+    match value {
+        Some(v) if VALID_RANGE_BEARING_COORDINATE_SYSTEMS.contains(&v) => (true, String::new()),
+        _ => (false, error_message.to_string()),
+    }
+}
+
 pub fn validate_associated_detection(
     associated_detection: AssociatedDetection,
     node_id_error: &str,
@@ -134,7 +164,7 @@ pub fn validate_location(location: Location) -> (bool, String) {
         );
     }
 
-    let coordinate_system_validation = validate_required_nonzero(
+    let coordinate_system_validation = validate_location_coordinate_system(
         location.coordinate_system,
         "Coordinate system must be specified in location.",
     );
@@ -152,7 +182,7 @@ pub fn validate_location(location: Location) -> (bool, String) {
 }
 
 pub fn validate_range_bearing(range_bearing: RangeBearing) -> (bool, String) {
-    let coordinate_system_validation = validate_required_nonzero(
+    let coordinate_system_validation = validate_range_bearing_coordinate_system(
         range_bearing.coordinate_system,
         "Coordinate system must be specified in range bearing.",
     );
@@ -172,7 +202,7 @@ pub fn validate_range_bearing(range_bearing: RangeBearing) -> (bool, String) {
 }
 
 pub fn validate_range_bearing_cone(range_bearing: RangeBearingCone) -> (bool, String) {
-    let coordinate_system_validation = validate_required_nonzero(
+    let coordinate_system_validation = validate_range_bearing_coordinate_system(
         range_bearing.coordinate_system,
         "Coordinate system must be specified in range bearing.",
     );

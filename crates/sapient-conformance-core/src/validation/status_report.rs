@@ -76,8 +76,17 @@ fn validate_report_id(report_id: Option<String>) -> (bool, String) {
 }
 
 /// Function to check a system as specified in the SAPIENT version 7 ICD
+/// `System` value 4 is `reserved` in `status_report.proto` (withdrawn after
+/// SAPIENT v7 as not well-defined) -- still a legal `int32` on the wire, so
+/// it must be explicitly excluded rather than just checked for nonzero.
 fn validate_system(system: Option<i32>) -> (bool, String) {
-    validate_required_nonzero(system, "System must be specified in status report.")
+    match system {
+        Some(v) if [1, 2, 3, 5].contains(&v) => (true, String::new()),
+        _ => (
+            false,
+            "System must be specified in status report.".to_string(),
+        ),
+    }
 }
 
 /// Function to check a info as specified in the SAPIENT version 7 ICD
@@ -112,10 +121,30 @@ fn validate_location_or_range_bearing(
 }
 
 fn validate_status(status: Status) -> (bool, String) {
-    validate_required_nonzero(
+    let status_type_validation = validate_required_nonzero(
         status.status_type,
         "Status type must be specified in status report.",
-    )
+    );
+    if !status_type_validation.0 {
+        return status_type_validation;
+    }
+
+    validate_status_level(status.status_level)
+}
+
+/// `StatusLevel` value 1 is `reserved` in `status_report.proto`
+/// (`STATUS_LEVEL_SENSOR_STATUS`, withdrawn) -- still a legal `int32` on
+/// the wire. `status_level` itself is optional, so `None` is fine, but a
+/// present value must be one of the currently-defined ones.
+fn validate_status_level(status_level: Option<i32>) -> (bool, String) {
+    match status_level {
+        None => (true, String::new()),
+        Some(v) if [2, 3, 4].contains(&v) => (true, String::new()),
+        Some(_) => (
+            false,
+            "Status level is not a valid option in status report.".to_string(),
+        ),
+    }
 }
 
 fn validate_power(power: Power) -> (bool, String) {
@@ -231,20 +260,24 @@ mod status_report_validation_tests {
         );
     }
 
-    /// Unit test to check that systems are correctly validated
+    /// Unit test to check that systems are correctly validated, including
+    /// that the `reserved` value 4 (withdrawn `SYSTEM_TAMPER`) is rejected,
+    /// not just 0.
     #[test]
     fn test_system_validation() {
-        // valid system
-        assert_eq!((true, "".to_string()), validate_system(Some(1)));
+        for i in [1, 2, 3, 5] {
+            assert_eq!((true, "".to_string()), validate_system(Some(i)));
+        }
 
-        // invalid system
-        assert_eq!(
-            (
-                false,
-                "System must be specified in status report.".to_string()
-            ),
-            validate_system(Some(0))
-        );
+        for i in [0, 4] {
+            assert_eq!(
+                (
+                    false,
+                    "System must be specified in status report.".to_string()
+                ),
+                validate_system(Some(i))
+            );
+        }
     }
 
     #[test]
@@ -314,6 +347,32 @@ mod status_report_validation_tests {
                 status_type: None,
             })
         );
+
+        // status_level is optional -- absent is fine
+        assert_eq!(
+            (true, "".to_string()),
+            validate_status(Status {
+                status_level: None,
+                status_value: Some("clear".to_string()),
+                status_type: Some(4),
+            })
+        );
+
+        // reserved value 1 (withdrawn STATUS_LEVEL_SENSOR_STATUS) must be
+        // rejected when present, not just 0
+        for level in [0, 1] {
+            assert_eq!(
+                (
+                    false,
+                    "Status level is not a valid option in status report.".to_string()
+                ),
+                validate_status(Status {
+                    status_level: Some(level),
+                    status_value: Some("clear".to_string()),
+                    status_type: Some(4),
+                })
+            );
+        }
     }
 
     #[test]
