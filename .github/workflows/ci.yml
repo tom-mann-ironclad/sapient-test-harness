@@ -29,6 +29,10 @@ jobs:
         run: cargo build --workspace
       - name: Test
         run: cargo test --workspace
+      - name: Verify RULES.md is up to date
+        run: |
+          ./scripts/generate-rules.sh
+          git diff --exit-code -- RULES.md
 
   audit:
     runs-on: ubuntu-latest

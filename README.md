@@ -6,11 +6,6 @@ protocol, replacing the legacy Windows/.NET/PostgreSQL
 [`sapient-rs`](https://crates.io/crates/sapient-rs), the published SAPIENT
 protobuf bindings.
 
-See [`ROADMAP.md`](../ROADMAP.md) (one level up, at the monorepo root) for
-the full milestone plan. This crate is currently at **Milestone 0**:
-turning scaffolded validation code into a real, tested, CI-gated
-foundation.
-
 ## Layout
 
 This is a Cargo workspace:
@@ -20,8 +15,7 @@ This is a Cargo workspace:
   CLI or transport dependencies, so the same logic can back a CLI and a
   future hosted service without forking it.
 - `crates/sapient-test-harness-cli` — the `sapient-harness` binary. Just a
-  placeholder today; the real CLI (scenario running, reporting) is
-  Milestone 3.
+  placeholder today; the real binary will be implemented later.
 
 ## Parity with the legacy harness
 
@@ -37,6 +31,14 @@ Fixture JSON is canonical protobuf JSON, decoded via `prost-reflect` against
 `sapient_rs::FILE_DESCRIPTOR_SET_BYTES` — a compiled `FileDescriptorSet`
 that `sapient-rs` itself generates and ships (as of 0.2.0), so this crate
 has no vendored `.proto` sources or descriptor-compilation step of its own.
+
+## Conformance rule catalog
+
+[`RULES.md`](../RULES.md) lists every conformance rule this crate can
+produce a finding for — rule ID, source file, and message — generated
+directly from `crates/sapient-conformance-core/src/validation/*.rs` by
+`scripts/generate-rules.sh`. Don't hand-edit it; rerun the script after
+changing validation logic (CI checks it's up to date).
 
 ## Build & test
 

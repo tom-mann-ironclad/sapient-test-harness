@@ -25,6 +25,7 @@ serde_json.workspace = true
 prost-reflect = { version = "0.14", features = ["serde"] }
 prost-for-reflect = { package = "prost", version = "0.13" }
 libtest-mimic = "0.8"
+proptest = "1"
 
 [[test]]
 name = "parity"
