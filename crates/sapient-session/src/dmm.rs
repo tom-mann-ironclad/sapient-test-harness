@@ -1,59 +1,97 @@
-//! Async DMM-role driver: owns the actual socket I/O and framing, and
-//! drives the pure [`DmmSession`] state machine as bytes arrive. Uses its
-//! own minimal framing (matching `sapient-rs::utils`'s 4-byte
-//! little-endian length prefix) rather than `sapient_rs::utils::read`,
-//! because that function decodes internally and discards the raw bytes on
-//! failure -- this driver needs to keep them, so a decode failure can
-//! still be reported (and, once registered, replied to with an `Error`
-//! carrying the offending packet) at the session layer rather than
-//! surfacing only as an opaque I/O error.
+//! Async DMM-role driver: owns the actual socket I/O and drives the pure
+//! [`DmmSession`] state machine as bytes arrive. See `framing.rs` for why
+//! this uses its own minimal framing rather than `sapient_rs::utils::read`.
+//!
+//! [`DmmConnection`] mirrors `asm.rs`'s `AsmConnection`: split read/write
+//! halves so a caller can interleave `issue_task` (harness-initiated, the
+//! one thing the plain reactive [`run`] loop below can't do -- it owns
+//! the whole stream for its entire lifetime with no way to inject a
+//! `Task` mid-loop) with `poll_once` (reactive, auto-replying to
+//! `Registration`/`Alert`/decode-or-validation failures as needed).
 
 use std::io;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, split};
 
-use crate::state::DmmSession;
-use sapient_conformance_core::finding::Finding;
+use crate::framing::{read_frame, write_frame};
+use crate::state::{DmmSession, SessionState};
+use sapient_conformance_core::{bsi_flex_335_v2_0::Task, finding::Finding};
 
-/// Drives one DMM-role session over an already-connected stream (an
-/// accepted `TcpStream`, or one half of a `tokio::io::duplex` in tests)
-/// until the peer disconnects. Returns every finding accumulated over the
-/// whole session.
-pub async fn run<S>(harness_node_id: impl Into<String>, mut stream: S) -> io::Result<Vec<Finding>>
+/// Drives one DMM-role session over an already-connected stream (a
+/// connected `TcpStream`, or one half of a `tokio::io::duplex` in tests),
+/// split into independent read (`R`) and write (`W`) halves.
+pub struct DmmConnection<R, W> {
+    session: DmmSession,
+    reader: R,
+    writer: W,
+}
+
+impl<R, W> DmmConnection<R, W>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
 {
-    let mut session = DmmSession::new(harness_node_id);
-
-    while let Some(raw) = read_frame(&mut stream).await? {
-        if let Some(reply) = session.on_bytes(&raw) {
-            write_frame(&mut stream, &reply).await?;
+    pub fn new(harness_node_id: impl Into<String>, reader: R, writer: W) -> Self {
+        DmmConnection {
+            session: DmmSession::new(harness_node_id),
+            reader,
+            writer,
         }
     }
 
-    Ok(session.take_findings())
-}
-
-/// Reads one length-prefixed frame's payload. Returns `Ok(None)` on a
-/// clean disconnect (EOF exactly at a frame boundary); any other I/O
-/// error (including a partial frame, i.e. EOF mid-read) propagates.
-async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Option<Vec<u8>>> {
-    let mut length_buf = [0_u8; 4];
-    match stream.read_exact(&mut length_buf).await {
-        Ok(_) => {}
-        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(err) => return Err(err),
+    pub fn state(&self) -> &SessionState {
+        self.session.state()
     }
 
-    let length = u32::from_le_bytes(length_buf) as usize;
-    let mut payload = vec![0_u8; length];
-    stream.read_exact(&mut payload).await?;
-    Ok(Some(payload))
+    pub fn findings(&self) -> &[Finding] {
+        self.session.findings()
+    }
+
+    pub fn take_findings(&mut self) -> Vec<Finding> {
+        self.session.take_findings()
+    }
+
+    /// Issue a `Task` to the ASM (harness-initiated, not a reply to
+    /// inbound traffic) -- see [`DmmSession::issue_task`].
+    pub async fn issue_task(&mut self, task: &Task) -> io::Result<()> {
+        let bytes = self.session.issue_task(task);
+        write_frame(&mut self.writer, &bytes).await
+    }
+
+    /// Read and process exactly one inbound frame, auto-replying if the
+    /// protocol requires it (`RegistrationAck`, `AlertAck`, or `Error`).
+    /// Returns `Ok(false)` on a clean disconnect.
+    pub async fn poll_once(&mut self) -> io::Result<bool> {
+        match read_frame(&mut self.reader).await? {
+            Some(raw) => {
+                if let Some(reply) = self.session.on_bytes(&raw) {
+                    write_frame(&mut self.writer, &reply).await?;
+                }
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Poll until the peer disconnects, auto-replying to everything that
+    /// needs it along the way.
+    pub async fn run_until_disconnect(&mut self) -> io::Result<()> {
+        while self.poll_once().await? {}
+        Ok(())
+    }
 }
 
-async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, payload: &[u8]) -> io::Result<()> {
-    let length = (payload.len() as u32).to_le_bytes();
-    stream.write_all(&length).await?;
-    stream.write_all(payload).await?;
-    Ok(())
+/// Drives one DMM-role session over an already-connected stream until the
+/// peer disconnects, auto-replying to everything reactively. Returns
+/// every finding accumulated over the whole session. A thin wrapper
+/// around [`DmmConnection`] for the common case that doesn't need to
+/// issue any `Task`s -- reach for `DmmConnection` directly when it does.
+pub async fn run<S>(harness_node_id: impl Into<String>, stream: S) -> io::Result<Vec<Finding>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (reader, writer) = split(stream);
+    let mut connection = DmmConnection::new(harness_node_id, reader, writer);
+    connection.run_until_disconnect().await?;
+    Ok(connection.take_findings())
 }

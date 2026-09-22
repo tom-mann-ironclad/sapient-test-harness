@@ -15,12 +15,24 @@ This is a Cargo workspace:
   CLI or transport dependencies, so the same logic can back a CLI and a
   future hosted service without forking it.
 - `crates/sapient-session` — protocol-level session state machine and
-  role drivers (currently DMM; ASM is a follow-up). `src/state.rs` is a
-  pure, synchronous state machine with no I/O; `src/dmm.rs` is a thin
-  `tokio` driver that owns the actual socket framing and calls into it.
-  Builds on `sapient-conformance-core` for message validation and adds
-  session-level sequencing, timing, and cross-message correlation a
-  single-message validator can't check.
+  role drivers, for both DMM and ASM. `state.rs`/`asm_state.rs` are pure,
+  synchronous state machines with no I/O; `dmm.rs`/`asm.rs` are thin
+  `tokio` drivers (`DmmConnection`/`AsmConnection`) that own the actual
+  socket, sharing frame read/write logic from `framing.rs`. Both split
+  the stream into independent read/write halves so a caller can issue a
+  message (e.g. the DMM issuing a `Task`, or the ASM sending
+  `Registration`/`StatusReport`/`DetectionReport`/`Alert`) and poll for
+  inbound messages without either blocking the other; `dmm::run` remains
+  as a thin reactive read-and-reply wrapper over `DmmConnection` for
+  callers that don't need to issue tasks mid-session. Builds on
+  `sapient-conformance-core` for message validation and adds session-level
+  sequencing, timing, and cross-message correlation a single-message
+  validator can't check.
+  `tests/dmm_asm_interop.rs` drives the harness's own `DmmConnection`
+  against its own `AsmConnection` over a real `tokio::io::duplex`, as a
+  genuine interoperability check independent of the hand-built fixtures
+  `tests/dmm_session.rs`/`tests/asm_session.rs` each test their own role
+  against.
 - `crates/sapient-test-harness-cli` — the `sapient-harness` binary. Just a
   placeholder today; the real binary will be implemented later.
 

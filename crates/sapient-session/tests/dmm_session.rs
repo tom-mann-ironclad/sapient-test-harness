@@ -3,18 +3,11 @@
 //! exercises the real async wire path end-to-end for the happy path, since
 //! that's the one thing this file's direct `on_bytes` calls don't touch.
 
-use prost::Message;
-use prost_types::Timestamp;
 use sapient_conformance_core::bsi_flex_335_v2_0::{
-    Alert, DetectionReport, Registration, SapientMessage, StatusReport, Task, TaskAck,
+    Alert, DetectionReport, SapientMessage, StatusReport, Task, TaskAck,
     alert::LocationOneof,
     detection_report::{DetectionReportClassification, LocationOneof as DetectionLocationOneof},
-    registration::{
-        Capability, ClassDefinition, ConfigurationData, DetectionClassDefinition,
-        DetectionDefinition, Duration, LocationType, ModeDefinition, ModeType, NodeDefinition,
-        RegionDefinition, StatusDefinition, TaskDefinition, TimeUnits,
-        location_type::{CoordinatesOneof, DatumOneof},
-    },
+    registration::ModeType,
     sapient_message::Content,
     status_report::System,
     task::{Command, command::Command as TaskCommandKind},
@@ -22,139 +15,19 @@ use sapient_conformance_core::bsi_flex_335_v2_0::{
 };
 use sapient_session::{DmmSession, SessionState};
 
+mod common;
+use common::{
+    ALTERNATE_MODE, DECLARED_CLASSIFICATION_TYPE, DEFAULT_MODE, STATUS_INTERVAL_SECONDS, decode,
+    encode, envelope, mode, valid_registration,
+};
+
 const HARNESS_NODE_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
 const ASM_NODE_ID: &str = "550e8400-e29b-41d4-a716-446655440001";
-const DEFAULT_MODE: &str = "Default";
-const ALTERNATE_MODE: &str = "Alternate";
-const DECLARED_CLASSIFICATION_TYPE: &str = "Human";
-const STATUS_INTERVAL_SECONDS: f32 = 5.0;
-
-fn valid_location_type() -> LocationType {
-    LocationType {
-        coordinates_oneof: Some(CoordinatesOneof::RangeBearingUnits(1)),
-        datum_oneof: Some(DatumOneof::RangeBearingDatum(1)),
-        zone: None,
-    }
-}
-
-fn duration(units: TimeUnits, value: f32) -> Duration {
-    Duration {
-        units: Some(units as i32),
-        value: Some(value),
-    }
-}
-
-fn mode(name: &str, mode_type: ModeType) -> ModeDefinition {
-    ModeDefinition {
-        mode_name: Some(name.to_string()),
-        mode_type: Some(mode_type as i32),
-        mode_description: None,
-        settle_time: Some(duration(TimeUnits::Seconds, 1.0)),
-        maximum_latency: None,
-        scan_type: None,
-        tracking_type: None,
-        duration: None,
-        mode_parameter: vec![],
-        detection_definition: vec![DetectionDefinition {
-            behaviour_definition: vec![],
-            detection_performance: vec![],
-            detection_class_definition: vec![DetectionClassDefinition {
-                confidence_definition: None,
-                class_performance: vec![],
-                class_definition: vec![ClassDefinition {
-                    r#type: Some(DECLARED_CLASSIFICATION_TYPE.to_string()),
-                    units: None,
-                    sub_class: vec![],
-                }],
-                taxonomy_dock_definition: vec![],
-            }],
-            detection_report: vec![],
-            geometric_error: None,
-            velocity_type: None,
-            location_type: Some(valid_location_type()),
-        }],
-        task: Some(TaskDefinition {
-            command: vec![],
-            concurrent_tasks: Some(1),
-            region_definition: Some(RegionDefinition {
-                settle_time: None,
-                region_type: vec![1],
-                region_area: vec![valid_location_type()],
-                class_filter_definition: vec![],
-                behaviour_filter_definition: vec![],
-            }),
-        }),
-    }
-}
-
-/// A registration declaring two modes (one MODE_TYPE_DEFAULT, one
-/// MODE_TYPE_PERMANENT reachable via a mode_change task) and a
-/// `status_interval` of `STATUS_INTERVAL_SECONDS`.
-fn valid_registration() -> Registration {
-    Registration {
-        icd_version: Some("BSI Flex 335 v2.0".to_string()),
-        node_definition: vec![NodeDefinition {
-            node_type: Some(1),
-            node_sub_type: vec![],
-        }],
-        name: None,
-        short_name: None,
-        capabilities: vec![Capability {
-            category: Some("Radar".to_string()),
-            r#type: Some("Range".to_string()),
-            value: None,
-            units: None,
-        }],
-        status_definition: Some(StatusDefinition {
-            status_interval: Some(duration(TimeUnits::Seconds, STATUS_INTERVAL_SECONDS)),
-            location_definition: None,
-            coverage_definition: None,
-            obscuration_definition: None,
-            status_report: vec![],
-            field_of_view_definition: None,
-        }),
-        mode_definition: vec![
-            mode(DEFAULT_MODE, ModeType::Default),
-            mode(ALTERNATE_MODE, ModeType::Permanent),
-        ],
-        reporting_region: vec![],
-        dependent_nodes: vec![],
-        config_data: vec![ConfigurationData {
-            manufacturer: "Acme".to_string(),
-            model: "Mk1".to_string(),
-            serial_number: None,
-            hardware_version: None,
-            software_version: None,
-            sub_components: vec![],
-        }],
-    }
-}
-
-fn timestamp(seconds: i64) -> Timestamp {
-    Timestamp { seconds, nanos: 0 }
-}
-
-fn envelope(node_id: &str, timestamp_seconds: i64, content: Content) -> SapientMessage {
-    SapientMessage {
-        timestamp: Some(timestamp(timestamp_seconds)),
-        node_id: Some(node_id.to_string()),
-        destination_id: Some(HARNESS_NODE_ID.to_string()),
-        content: Some(content),
-        additional_information: None,
-    }
-}
-
-fn encode(message: SapientMessage) -> Vec<u8> {
-    message.encode_to_vec()
-}
-
-fn decode_reply(reply: Vec<u8>) -> SapientMessage {
-    SapientMessage::decode(reply.as_slice()).expect("harness replies should always be valid")
-}
 
 fn status_report_at(seconds: i64, mode_name: &str) -> SapientMessage {
     envelope(
         ASM_NODE_ID,
+        HARNESS_NODE_ID,
         seconds,
         Content::StatusReport(StatusReport {
             report_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
@@ -176,11 +49,12 @@ fn register(session: &mut DmmSession) {
     let reply = session
         .on_bytes(&encode(envelope(
             ASM_NODE_ID,
+            HARNESS_NODE_ID,
             0,
             Content::Registration(valid_registration()),
         )))
         .expect("Registration should always get a RegistrationAck reply");
-    let ack = decode_reply(reply);
+    let ack = decode(&reply);
     assert!(matches!(ack.content, Some(Content::RegistrationAck(_))));
 }
 
@@ -224,11 +98,12 @@ fn invalid_registration_is_rejected_via_registration_ack_not_error() {
     let reply = session
         .on_bytes(&encode(envelope(
             ASM_NODE_ID,
+            HARNESS_NODE_ID,
             0,
             Content::Registration(bad_registration),
         )))
         .expect("an invalid Registration still gets a RegistrationAck reply");
-    let ack = decode_reply(reply);
+    let ack = decode(&reply);
 
     match ack.content {
         Some(Content::RegistrationAck(ack)) => assert_eq!(ack.acceptance, Some(false)),
@@ -298,6 +173,7 @@ fn goodbye_status_report_returns_to_awaiting_registration() {
 
     let goodbye = envelope(
         ASM_NODE_ID,
+        HARNESS_NODE_ID,
         1,
         Content::StatusReport(StatusReport {
             report_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
@@ -344,12 +220,13 @@ fn re_registration_fully_replaces_the_contract() {
     let reply = session
         .on_bytes(&encode(envelope(
             ASM_NODE_ID,
+            HARNESS_NODE_ID,
             2,
             Content::Registration(second_registration),
         )))
         .unwrap();
     assert!(matches!(
-        decode_reply(reply).content,
+        decode(&reply).content,
         Some(Content::RegistrationAck(ref ack)) if ack.acceptance == Some(true)
     ));
 
@@ -430,6 +307,7 @@ fn detection_report_with_declared_classification_produces_no_finding() {
 
     session.on_bytes(&encode(envelope(
         ASM_NODE_ID,
+        HARNESS_NODE_ID,
         1,
         Content::DetectionReport(DetectionReport {
             report_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
@@ -479,6 +357,7 @@ fn detection_report_with_undeclared_classification_is_a_finding() {
 
     session.on_bytes(&encode(envelope(
         ASM_NODE_ID,
+        HARNESS_NODE_ID,
         1,
         Content::DetectionReport(DetectionReport {
             report_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
@@ -534,6 +413,7 @@ fn alert_receives_an_alert_ack_reply() {
     let reply = session
         .on_bytes(&encode(envelope(
             ASM_NODE_ID,
+            HARNESS_NODE_ID,
             1,
             Content::Alert(Alert {
                 alert_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
@@ -564,7 +444,7 @@ fn alert_receives_an_alert_ack_reply() {
         )))
         .expect("a valid Alert should get an AlertAck reply");
 
-    match decode_reply(reply).content {
+    match decode(&reply).content {
         Some(Content::AlertAck(ack)) => {
             assert_eq!(ack.alert_id.as_deref(), Some("01H1VV3VN40RV97CDFSXJB44K9"));
         }
@@ -590,6 +470,7 @@ fn task_ack_correlates_against_outstanding_tasks() {
 
     session.on_bytes(&encode(envelope(
         ASM_NODE_ID,
+        HARNESS_NODE_ID,
         1,
         Content::TaskAck(TaskAck {
             task_id: Some("01H1VV3VN40RV97CDFSXJB44KA".to_string()),
@@ -609,6 +490,7 @@ fn task_ack_with_unknown_task_id_is_a_finding() {
 
     session.on_bytes(&encode(envelope(
         ASM_NODE_ID,
+        HARNESS_NODE_ID,
         1,
         Content::TaskAck(TaskAck {
             task_id: Some("01H1VV3VN40RV97CDFSXJB44KA".to_string()),
@@ -641,15 +523,13 @@ fn post_registration_invalid_message_triggers_an_error_reply() {
     let reply = session
         .on_bytes(&encode(envelope(
             ASM_NODE_ID,
+            HARNESS_NODE_ID,
             1,
             Content::StatusReport(bad_status_report),
         )))
         .expect("a post-Registration validation failure should get an Error reply");
 
-    assert!(matches!(
-        decode_reply(reply).content,
-        Some(Content::Error(_))
-    ));
+    assert!(matches!(decode(&reply).content, Some(Content::Error(_))));
     // Purely informational -- session stays Registered.
     assert!(matches!(session.state(), SessionState::Registered(_)));
 }
@@ -664,7 +544,7 @@ fn undecodable_bytes_after_registration_trigger_an_error_reply_with_the_packet()
         .on_bytes(&garbage)
         .expect("undecodable bytes post-Registration should get an Error reply");
 
-    match decode_reply(reply).content {
+    match decode(&reply).content {
         Some(Content::Error(error)) => {
             assert_eq!(error.packet.as_deref(), Some(garbage.as_slice()));
         }
@@ -692,6 +572,7 @@ fn receiving_an_unprompted_error_is_recorded_as_a_finding_about_the_peer() {
 
     let reply = session.on_bytes(&encode(envelope(
         ASM_NODE_ID,
+        HARNESS_NODE_ID,
         1,
         Content::Error(sapient_conformance_core::bsi_flex_335_v2_0::Error {
             packet: Some(vec![1, 2, 3]),
