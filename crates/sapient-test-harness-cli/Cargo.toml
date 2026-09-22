@@ -1,0 +1,15 @@
+[package]
+name = "sapient-test-harness-cli"
+description = "CLI for the independent SAPIENT / BSI Flex 335 conformance test harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "sapient-harness"
+path = "src/main.rs"
+
+[dependencies]
+sapient-conformance-core = { path = "../sapient-conformance-core" }

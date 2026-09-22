@@ -1,0 +1,32 @@
+[package]
+name = "sapient-conformance-core"
+description = "Independent SAPIENT / BSI Flex 335 conformance validation engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+sapient-rs.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+ulid.workspace = true
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# prost-reflect 0.14 pins prost 0.13 internally (one major behind the
+# workspace's prost 0.14, used by sapient-rs). DynamicMessage only
+# implements the 0.13 `Message` trait, so it's pulled in separately here
+# under an alias purely to call `encode_to_vec` on DynamicMessage; decoding
+# into sapient-rs types still goes through the normal (0.14) `prost::Message`.
+prost-reflect = { version = "0.14", features = ["serde"] }
+prost-for-reflect = { package = "prost", version = "0.13" }
+libtest-mimic = "0.8"
+
+[[test]]
+name = "parity"
+path = "tests/parity.rs"
+harness = false

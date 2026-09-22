@@ -1,0 +1,353 @@
+use crate::bsi_flex_335_v2_0::{
+    LocationOrRangeBearing, StatusReport,
+    status_report::{Power, Status},
+};
+use crate::validation::common::{
+    validate_location,
+    validate_location_or_range_bearing as validate_common_location_or_range_bearing,
+    validate_required_nonzero, validate_required_string, validate_ulid,
+};
+
+/// Function to validation a SAPIENT status report message
+pub fn validate_status_report(status_report: StatusReport) -> (bool, String) {
+    let mut validations = vec![];
+
+    // Check report ID
+    validations.push(validate_report_id(status_report.report_id));
+
+    // Check system
+    validations.push(validate_system(status_report.system));
+
+    // Check info
+    validations.push(validate_info(status_report.info));
+
+    // Check active task ID if provided
+    if status_report.active_task_id.is_some() {
+        validations.push(validate_ulid(
+            status_report.active_task_id.as_deref(),
+            "A valid ULID must be used for an active task ID in a status report.",
+        ));
+    }
+
+    // Check mode
+    validations.push(validate_mode(status_report.mode));
+
+    // Check node location if provided
+    if let Some(node_location) = status_report.node_location {
+        validations.push(validate_location(node_location));
+    }
+
+    if let Some(power) = status_report.power {
+        validations.push(validate_power(power));
+    }
+
+    // Check field of view if provided
+    if let Some(field_of_view) = status_report.field_of_view {
+        validations.push(validate_location_or_range_bearing(field_of_view));
+    }
+
+    for coverage in status_report.coverage {
+        validations.push(validate_location_or_range_bearing(coverage));
+    }
+
+    for obscuration in status_report.obscuration {
+        validations.push(validate_location_or_range_bearing(obscuration));
+    }
+
+    for status in status_report.status {
+        validations.push(validate_status(status));
+    }
+
+    for validation in validations {
+        if !validation.0 {
+            return validation;
+        }
+    }
+
+    (true, "".to_string())
+}
+
+/// Function to check a report ID as specified in the SAPIENT version 7 ICD
+fn validate_report_id(report_id: Option<String>) -> (bool, String) {
+    validate_ulid(
+        report_id.as_deref(),
+        "A valid ULID must be used for a report ID in a status report.",
+    )
+}
+
+/// Function to check a system as specified in the SAPIENT version 7 ICD
+fn validate_system(system: Option<i32>) -> (bool, String) {
+    validate_required_nonzero(system, "System must be specified in status report.")
+}
+
+/// Function to check a info as specified in the SAPIENT version 7 ICD
+fn validate_info(info: Option<i32>) -> (bool, String) {
+    let valid_info = match info {
+        Some(0) => false,
+        Some(1) => true,
+        Some(2) => true,
+        _ => false,
+    };
+    if !valid_info {
+        return (
+            false,
+            "Info must be specified in status report.".to_string(),
+        );
+    }
+
+    (true, "".to_string())
+}
+
+fn validate_mode(mode: Option<String>) -> (bool, String) {
+    validate_required_string(mode.as_deref(), "Mode must be specified in status report.")
+}
+
+fn validate_location_or_range_bearing(
+    location_or_range_bearing: LocationOrRangeBearing,
+) -> (bool, String) {
+    validate_common_location_or_range_bearing(
+        location_or_range_bearing,
+        "Location or range-bearing must be specified in status report.",
+    )
+}
+
+fn validate_status(status: Status) -> (bool, String) {
+    validate_required_nonzero(
+        status.status_type,
+        "Status type must be specified in status report.",
+    )
+}
+
+fn validate_power(power: Power) -> (bool, String) {
+    let _ = power;
+    (true, "".to_string())
+}
+
+#[cfg(test)]
+mod status_report_validation_tests {
+    use crate::{
+        bsi_flex_335_v2_0::{
+            Location, LocationList, LocationOrRangeBearing, StatusReport,
+            location_or_range_bearing::FovOneof,
+            status_report::{Power, Status},
+        },
+        validation::status_report::{
+            validate_info, validate_mode, validate_report_id, validate_status,
+            validate_status_report, validate_system,
+        },
+    };
+
+    /// Unit test to check that status reports are correctly validated
+    #[test]
+    fn test_status_report_validation() {
+        // valid status report
+        let valid_status_report = StatusReport {
+            report_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            system: Some(1),
+            info: Some(1),
+            active_task_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            mode: Some("Default".to_string()),
+            power: None,
+            node_location: Some(Location {
+                x: Some(1.0),
+                y: Some(1.0),
+                z: None,
+                x_error: None,
+                y_error: None,
+                z_error: None,
+                coordinate_system: Some(1),
+                datum: Some(1),
+                utm_zone: None,
+            }),
+            field_of_view: Some(LocationOrRangeBearing {
+                fov_oneof: Some(FovOneof::LocationList(LocationList {
+                    locations: vec![Location {
+                        x: Some(1.0),
+                        y: Some(1.0),
+                        z: None,
+                        x_error: None,
+                        y_error: None,
+                        z_error: None,
+                        coordinate_system: Some(1),
+                        datum: Some(1),
+                        utm_zone: None,
+                    }],
+                })),
+            }),
+            coverage: vec![],
+            obscuration: vec![],
+            status: vec![Status {
+                status_level: Some(2),
+                status_value: Some("raining".to_string()),
+                status_type: Some(4),
+            }],
+        };
+        assert_eq!(
+            (true, "".to_string()),
+            validate_status_report(valid_status_report)
+        );
+
+        // missing report ID
+        let valid_status_report = StatusReport {
+            report_id: None,
+            system: Some(1),
+            info: Some(1),
+            active_task_id: None,
+            mode: Some("Default".to_string()),
+            power: None,
+            node_location: None,
+            field_of_view: None,
+            coverage: vec![],
+            obscuration: vec![],
+            status: vec![],
+        };
+        assert_eq!(
+            (
+                false,
+                "A valid ULID must be used for a report ID in a status report.".to_string()
+            ),
+            validate_status_report(valid_status_report)
+        );
+    }
+
+    /// Unit test to check that report IDs are correctly validated
+    #[test]
+    fn test_report_id_validation() {
+        // valid report ID
+        let valid_report_id = "01H1VV3VN40RV97CDFSXJB44K9".to_string();
+        assert_eq!(
+            (true, "".to_string()),
+            validate_report_id(Some(valid_report_id))
+        );
+
+        // invalid report ID
+        let invalid_report_id = "".to_string();
+        assert_eq!(
+            (
+                false,
+                "A valid ULID must be used for a report ID in a status report.".to_string()
+            ),
+            validate_report_id(Some(invalid_report_id))
+        );
+    }
+
+    /// Unit test to check that systems are correctly validated
+    #[test]
+    fn test_system_validation() {
+        // valid system
+        assert_eq!((true, "".to_string()), validate_system(Some(1)));
+
+        // invalid system
+        assert_eq!(
+            (
+                false,
+                "System must be specified in status report.".to_string()
+            ),
+            validate_system(Some(0))
+        );
+    }
+
+    #[test]
+    fn test_mode_validation() {
+        assert_eq!(
+            (true, "".to_string()),
+            validate_mode(Some("Default".to_string()))
+        );
+        assert_eq!(
+            (
+                false,
+                "Mode must be specified in status report.".to_string()
+            ),
+            validate_mode(None)
+        );
+    }
+
+    /// Unit test to check that infos are correctly validated
+    #[test]
+    fn test_info_validation() {
+        // valid info
+        assert_eq!((true, "".to_string()), validate_info(Some(1)));
+        assert_eq!((true, "".to_string()), validate_info(Some(2)));
+
+        // invalid info
+        assert_eq!(
+            (
+                false,
+                "Info must be specified in status report.".to_string()
+            ),
+            validate_info(None)
+        );
+        assert_eq!(
+            (
+                false,
+                "Info must be specified in status report.".to_string()
+            ),
+            validate_info(Some(0))
+        );
+        assert_eq!(
+            (
+                false,
+                "Info must be specified in status report.".to_string()
+            ),
+            validate_info(Some(3))
+        );
+    }
+
+    #[test]
+    fn test_status_entry_validation() {
+        assert_eq!(
+            (true, "".to_string()),
+            validate_status(Status {
+                status_level: Some(2),
+                status_value: Some("clear".to_string()),
+                status_type: Some(4),
+            })
+        );
+        assert_eq!(
+            (
+                false,
+                "Status type must be specified in status report.".to_string()
+            ),
+            validate_status(Status {
+                status_level: Some(2),
+                status_value: Some("clear".to_string()),
+                status_type: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_optional_power_subfields_are_accepted() {
+        let mut status_report = StatusReport {
+            report_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            system: Some(1),
+            info: Some(1),
+            active_task_id: None,
+            mode: Some("Default".to_string()),
+            power: Some(Power {
+                level: Some(95),
+                source: 0,
+                status: 0,
+            }),
+            node_location: None,
+            field_of_view: None,
+            coverage: vec![],
+            obscuration: vec![],
+            status: vec![],
+        };
+        assert_eq!(
+            (true, "".to_string()),
+            validate_status_report(status_report.clone())
+        );
+
+        status_report.power = Some(Power {
+            level: Some(95),
+            source: 1,
+            status: 0,
+        });
+        assert_eq!(
+            (true, "".to_string()),
+            validate_status_report(status_report)
+        );
+    }
+}
