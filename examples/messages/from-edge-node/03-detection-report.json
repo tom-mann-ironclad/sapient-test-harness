@@ -1,0 +1,20 @@
+{
+  "timestamp": "2024-01-01T00:00:06.000000000Z",
+  "nodeId": "550e8400-e29b-41d4-a716-446655440001",
+  "destinationId": "550e8400-e29b-41d4-a716-446655440000",
+  "detectionReport": {
+    "reportId": "01H1VV3VN40RV97CDFSXJB44K2",
+    "objectId": "01H1VV3VN40RV97CDFSXJB44K3",
+    "location": {
+      "x": 51.1739726374,
+      "y": -1.82237671048,
+      "z": 788,
+      "coordinateSystem": "LOCATION_COORDINATE_SYSTEM_UTM_M",
+      "datum": "LOCATION_DATUM_WGS84_E",
+      "utmZone": "30U"
+    },
+    "classification": [
+      { "type": "Human", "confidence": 0.8 }
+    ]
+  }
+}

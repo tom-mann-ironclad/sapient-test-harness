@@ -1,0 +1,90 @@
+{
+  "timestamp": "2024-01-01T00:00:00.000000000Z",
+  "nodeId": "550e8400-e29b-41d4-a716-446655440001",
+  "destinationId": "550e8400-e29b-41d4-a716-446655440000",
+  "registration": {
+    "icdVersion": "BSI Flex 335 v2.0",
+    "nodeDefinition": [
+      { "nodeType": "NODE_TYPE_CAMERA", "nodeSubType": ["InfraredCamera"] }
+    ],
+    "capabilities": [
+      { "category": "Camera", "type": "Range", "value": "500", "units": "Metres" }
+    ],
+    "statusDefinition": {
+      "statusInterval": { "units": "TIME_UNITS_SECONDS", "value": 5 }
+    },
+    "modeDefinition": [
+      {
+        "modeName": "Default",
+        "modeType": "MODE_TYPE_DEFAULT",
+        "settleTime": { "units": "TIME_UNITS_SECONDS", "value": 1 },
+        "detectionDefinition": [
+          {
+            "locationType": {
+              "locationUnits": "LOCATION_COORDINATE_SYSTEM_UTM_M",
+              "locationDatum": "LOCATION_DATUM_WGS84_E",
+              "zone": "30U"
+            },
+            "detectionClassDefinition": [
+              {
+                "classDefinition": [
+                  { "type": "Human" }
+                ]
+              }
+            ]
+          }
+        ],
+        "task": {
+          "concurrentTasks": 1,
+          "regionDefinition": {
+            "regionType": ["REGION_TYPE_AREA_OF_INTEREST"],
+            "regionArea": [
+              {
+                "locationUnits": "LOCATION_COORDINATE_SYSTEM_UTM_M",
+                "locationDatum": "LOCATION_DATUM_WGS84_E",
+                "zone": "30U"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "modeName": "Alternate",
+        "modeType": "MODE_TYPE_PERMANENT",
+        "settleTime": { "units": "TIME_UNITS_SECONDS", "value": 1 },
+        "detectionDefinition": [
+          {
+            "locationType": {
+              "locationUnits": "LOCATION_COORDINATE_SYSTEM_UTM_M",
+              "locationDatum": "LOCATION_DATUM_WGS84_E",
+              "zone": "30U"
+            },
+            "detectionClassDefinition": [
+              {
+                "classDefinition": [
+                  { "type": "Human" }
+                ]
+              }
+            ]
+          }
+        ],
+        "task": {
+          "concurrentTasks": 1,
+          "regionDefinition": {
+            "regionType": ["REGION_TYPE_AREA_OF_INTEREST"],
+            "regionArea": [
+              {
+                "locationUnits": "LOCATION_COORDINATE_SYSTEM_UTM_M",
+                "locationDatum": "LOCATION_DATUM_WGS84_E",
+                "zone": "30U"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "configData": [
+      { "manufacturer": "Acme", "model": "Mk1" }
+    ]
+  }
+}

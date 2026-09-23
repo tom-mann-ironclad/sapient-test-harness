@@ -1,0 +1,10 @@
+{
+  "timestamp": "2024-01-01T00:00:07.000000000Z",
+  "nodeId": "550e8400-e29b-41d4-a716-446655440001",
+  "destinationId": "550e8400-e29b-41d4-a716-446655440000",
+  "taskAck": {
+    "taskId": "01H1VV3VN40RV97CDFSXJB44K4",
+    "taskStatus": "TASK_STATUS_ACCEPTED",
+    "reason": ["Mode change accepted."]
+  }
+}

@@ -6,6 +6,10 @@ protocol, replacing the legacy Windows/.NET/PostgreSQL
 [`sapient-rs`](https://crates.io/crates/sapient-rs), the published SAPIENT
 protobuf bindings.
 
+New to the CLI? Start with [`QUICKSTART.md`](QUICKSTART.md) -- install,
+run it against your Edge Node or C2 Node implementation, and read the
+result. This README covers the workspace layout and internals instead.
+
 ## Layout
 
 This is a Cargo workspace:

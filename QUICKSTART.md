@@ -1,0 +1,250 @@
+# Quickstart
+
+Get a real conformance result against your own SAPIENT / BSI Flex 335
+implementation in about 10 minutes. See [`README.md`](README.md) for how
+the harness is built; this doc is just "install it, run it, read the
+result."
+
+## 1. Install
+
+There's no published crate or pre-built release binary yet. For now, build
+from source. You need a recent stable Rust toolchain 
+([rustup.rs](https://rustup.rs) if you don't have one).
+
+```bash
+git clone https://github.com/tom-mann-ironclad/sapient-test-harness.git
+cd sapient-test-harness
+cargo build --release -p sapient-test-harness-cli
+```
+
+The binary is now at `target/release/sapient-harness`. Optionally install
+it onto your `PATH`:
+
+```bash
+cargo install --path crates/sapient-test-harness-cli
+```
+
+Confirm it works:
+
+```bash
+sapient-harness --help
+```
+
+## 2. A note on terminology
+
+The wire protocol and this harness's own code and `--role` flag still use
+the original naming -- **ASM** (Autonomous Sensor Module) and **DMM**
+(Decision Making Module) -- since that's what the ICD and the existing
+test suite are built around. Current SAPIENT usage prefers **Edge Node**
+and **C2 Node**. They mean the same things:
+
+| Current term | `--role` value | Sends | Receives |
+|---|---|---|---|
+| Edge Node | `asm` | `Registration`, `StatusReport`, `DetectionReport`, `Alert` | `RegistrationAck`, `Task`, `AlertAck` |
+| C2 Node | `dmm` | `RegistrationAck`, `Task`, `AlertAck` | `Registration`, `StatusReport`, `DetectionReport`, `Alert` |
+
+## 3. Running against your implementation
+
+The harness always plays the *other* role from whatever you're testing --
+point it at your implementation, and it drives a real session against it.
+
+**Developing an Edge Node?** Run the harness as the C2 Node it registers
+with. `--target` is the address the harness listens on -- bind it
+somewhere your Edge Node can actually reach (e.g. `<C2 IP address>:<port>` if it's on
+another machine or in a container):
+
+```bash
+sapient-harness run --role dmm --target <C2 IP Address>:5000
+```
+
+Then point your Edge Node's C2 connection at that address (the C2 test harness
+machine's IP and port `5000`, or `127.0.0.1:5000` if it's running
+locally too) and let it register.
+
+**Developing a C2 Node?** Run the harness as an Edge Node that connects
+out to it:
+
+```bash
+sapient-harness run --role asm --target <C2 node IP address>:5000
+```
+
+Either way, the harness drives one full conformance session (registration,
+status reporting, a detection, a mode-change task, an alert) and prints a
+pass/fail report. Useful flags:
+
+- `--connect-timeout-secs <N>` (default 30) -- how long to wait for the
+  other side to connect.
+- `--max-runtime-secs <N>` (default 120) -- overall cap on the run. For
+  `--role dmm` this also bounds how long the harness waits for the Edge
+  Node to end the session itself -- the harness never disconnects a
+  C2-role session first.
+- `--format json` -- machine-readable output for CI, on `stdout` only
+  (progress messages go to `stderr`, so `stdout` stays clean JSON).
+- `--node-id <uuid>` -- override the random node ID the harness stamps on
+  its own outgoing messages.
+
+## 4. Interpreting the result
+
+While the session runs, progress streams live to your terminal (registered,
+messages exchanged, any timeouts) -- that's on `stderr`. The final report,
+on `stdout`, looks like this on success:
+
+```
+sapient-harness run -- role=asm suite=v2.0 target=127.0.0.1:5000
+
+PASS -- no conformance findings.
+
+Notes:
+  - Registration accepted.
+  - Processed an inbound message from the DMM (e.g. a Task) before continuing.
+  - Alert acknowledged.
+  - Sent a GoodBye StatusReport to end the session gracefully.
+```
+
+A failing run instead shows `FAIL -- N finding(s).` followed by the
+findings grouped by severity:
+
+```
+FAIL -- 1 finding(s).
+
+Error:
+  [registration.icd_version.invalid] registration.icd_version: ICD version specified in registration is not a valid option.
+```
+
+Each finding has a stable `rule_id` (see
+[`RULES.md`](RULES.md) for the full catalog of what the harness checks),
+the field it's about, and a human-readable explanation. `Warning`-severity
+findings (e.g. falling back to a legacy mode-declaration convention) don't
+fail the run; only `Error`-severity ones do.
+
+**Exit codes** (`run` and `selftest`): `0` pass, `1` conformance findings,
+`2` a harness-level failure (couldn't connect, bad arguments, etc.) --
+distinct from `1` so CI can tell "your implementation failed" from "the
+harness itself couldn't run."
+
+### JSON output
+
+`--format json` prints the same report as JSON instead of text, on
+`stdout` only -- progress messages always go to `stderr`, so piping or
+redirecting `stdout` gets you clean JSON with nothing else mixed in:
+
+```bash
+sapient-harness run --role asm --target your-c2-node-host:5000 \
+  --format json > result.json
+```
+
+```json
+{
+  "role": "asm",
+  "suite": "v2.0",
+  "target": "127.0.0.1:5000",
+  "passed": true,
+  "findings": [],
+  "notes": [
+    "Registration accepted.",
+    "Processed an inbound message from the DMM (e.g. a Task) before continuing.",
+    "Alert acknowledged.",
+    "Sent a GoodBye StatusReport to end the session gracefully."
+  ]
+}
+```
+
+`findings` has the same `rule_id`/`field_path`/`severity`/`message` shape
+as the text report's findings, just structured -- handy for `jq`, e.g.
+`jq '.findings[] | select(.severity == "error")' result.json`.
+`selftest` also takes `--format json` (a `total`/`passed`/`mismatches`
+shape). `send` doesn't -- it doesn't produce one structured report to
+serialise (see below).
+
+Before trusting a result, you can confirm the harness itself is healthy --
+no network needed:
+
+```bash
+sapient-harness selftest
+```
+
+```
+sapient-harness selftest -- 231 bundled fixtures
+
+PASS -- every fixture classified as expected.
+```
+
+## 5. Using in CI
+
+`--format json` plus the distinct `0`/`1`/`2` exit codes are meant for
+this: run the harness as a CI step, capture its JSON report as a build
+artifact, and fail the job on a non-zero exit. A GitHub Actions example,
+since that's what this repo's own CI uses (`.github/workflows/ci.yml`):
+
+```yaml
+- name: Run SAPIENT conformance test
+  id: conformance
+  run: |
+    sapient-harness run --role asm --target your-c2-node-host:5000 \
+      --format json > result.json
+    echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+  continue-on-error: true # let later steps run even on a failing result
+
+- name: Upload conformance result
+  if: always() # capture the artifact whether it passed or not
+  uses: actions/upload-artifact@v4
+  with:
+    name: sapient-conformance-result
+    path: result.json
+
+- name: Fail the job on a non-passing result
+  if: steps.conformance.outputs.exit_code != '0'
+  run: exit 1
+```
+
+`continue-on-error` on the run step keeps the job alive long enough to
+upload the artifact even when the harness itself exits non-zero; the
+final step is what actually fails the job, based on the exit code the
+first step recorded. If you need to tell "conformance findings" (`1`)
+apart from "the harness itself couldn't run" (`2`) in CI, branch on
+`steps.conformance.outputs.exit_code` directly instead of the
+`!= '0'` check above.
+
+## 6. Sending custom messages
+
+`run` drives one fixed scenario. To explore anything else -- a specific
+detection, an edge case, a deliberately malformed message to see how your
+implementation reacts -- use `send` to fire off hand-crafted messages
+directly, one at a time or several in sequence over one connection:
+
+```bash
+sapient-harness send --role asm --target your-c2-node-host:5000 \
+  --file examples/messages/from-edge-node/01-registration.json \
+  --file examples/messages/from-edge-node/02-status-report.json
+```
+
+See [`examples/messages/`](examples/messages/) for a full set of ready-to-edit
+example messages (one per message type, organised by who sends them) and
+[its README](examples/messages/README.md) for what each one is.
+
+Each `--file` is a `SapientMessage` in canonical protobuf JSON -- the same
+format used throughout this repo's own fixtures
+(`crates/sapient-conformance-core/tests/fixtures/`), so any of those are
+fair game as starting points too. `send` is deliberately raw: it doesn't
+track session state, so it won't stop you from sending something
+non-conformant -- it validates each message against the harness's own
+rules first and prints a warning if it fails, but sends it regardless.
+That's the point: it's for testing how your implementation handles things
+`run`'s fixed scenario doesn't cover, including things that shouldn't be
+valid.
+
+`send` has no pass/fail verdict of its own (exit `0` once every `--file`
+has been sent, `2` on a harness-level failure) -- read the printed replies
+and warnings yourself.
+
+## 7. Reporting bugs
+
+For now, open an issue on GitHub:
+<https://github.com/tom-mann-ironclad/sapient-test-harness/issues>
+
+Please include:
+- The command you ran (redact any addresses you don't want public).
+- The full output, including any `stderr` progress lines.
+- `sapient-harness --version`, and whether `sapient-harness selftest`
+  passes (rules out the harness itself being unhealthy).
+- If it's a `send` session, the message file(s) you used.

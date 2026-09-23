@@ -1,0 +1,10 @@
+{
+  "timestamp": "2024-01-01T00:00:09.000000000Z",
+  "nodeId": "550e8400-e29b-41d4-a716-446655440000",
+  "destinationId": "550e8400-e29b-41d4-a716-446655440001",
+  "alertAck": {
+    "alertId": "01H1VV3VN40RV97CDFSXJB44K5",
+    "alertAckStatus": "ALERT_ACK_STATUS_ACCEPTED",
+    "reason": ["Alert accepted."]
+  }
+}
