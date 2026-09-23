@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -24,6 +25,11 @@ pub enum Command {
     /// to confirm the harness itself is healthy before trusting a `run`
     /// result against it. No network needed.
     Selftest(SelftestArgs),
+    /// Manually send one or more hand-crafted messages to a target and
+    /// observe how it replies, without running the bundled scenario or
+    /// tracking session state. For exploring behaviour the bundled `run`
+    /// scenario doesn't cover, without writing Rust.
+    Send(SendArgs),
 }
 
 #[derive(Args)]
@@ -31,6 +37,44 @@ pub struct SelftestArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
+}
+
+#[derive(Args)]
+pub struct SendArgs {
+    /// Which role the harness plays: `dmm` listens on `--target` for a
+    /// peer to connect in; `asm` connects out to `--target`.
+    #[arg(long, value_enum)]
+    pub role: Role,
+
+    /// For `--role dmm`, the address to listen on. For `--role asm`, the
+    /// address to connect to.
+    #[arg(long)]
+    pub target: SocketAddr,
+
+    /// A message to send, as a path to a canonical-protobuf-JSON
+    /// `SapientMessage` file (the same format used by
+    /// `sapient-conformance-core/tests/fixtures/`) -- node_id, timestamp,
+    /// destination_id, and content are all taken verbatim from the file,
+    /// letting you hand-craft exact message content, including
+    /// deliberately non-conformant messages. Repeat `--file` to send
+    /// several messages in order over the same connection (e.g. a
+    /// Registration, then a StatusReport). Each message is validated
+    /// against this crate's own conformance rules before sending; a
+    /// failure is printed as a warning, not a reason to skip sending it.
+    #[arg(long = "file", required = true)]
+    pub files: Vec<PathBuf>,
+
+    /// How long to wait for the peer to connect (`--role dmm`) or for the
+    /// outbound connection to establish (`--role asm`), in seconds.
+    #[arg(long, default_value_t = 30)]
+    pub connect_timeout_secs: u64,
+
+    /// How long to wait for a reply after each message, in seconds. Most
+    /// message types don't get a reply at all (only Registration, Task,
+    /// and Alert do) -- this just bounds how long to wait before moving on
+    /// to the next `--file`.
+    #[arg(long, default_value_t = 10)]
+    pub response_timeout_secs: u64,
 }
 
 #[derive(Args)]

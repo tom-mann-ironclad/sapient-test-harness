@@ -43,10 +43,19 @@ This is a Cargo workspace:
   same 231 fixtures `sapient-conformance-core/tests/parity.rs` checks at
   build time, embedded into the binary via `include_dir!` so no source
   tree is needed at run time) -- no network, just a health check that the
-  harness itself is trustworthy before pointing `run` at something. Both
-  commands take `--format json` for CI; exit code 0 (pass), 1
-  (conformance findings/fixture mismatches), or 2 (harness-level failure,
-  e.g. couldn't connect).
+  harness itself is trustworthy before pointing `run` at something.
+  `sapient-harness send --role dmm|asm --target <addr> --file <path.json>
+  [--file <path.json> ...]` manually sends one or more hand-crafted
+  messages over one connection and prints whatever comes back -- each
+  `--file` is a canonical-protobuf-JSON `SapientMessage` (the same format
+  the fixtures under `sapient-conformance-core/tests/fixtures/` use, so
+  an existing fixture is a ready-made template to copy and edit).
+  Deliberately raw: no `DmmSession`/`AsmSession`, no session-state
+  tracking, so it isn't constrained by the harness's own session rules --
+  a message that fails `validate_sapient_message` is sent anyway, with a
+  printed warning, not blocked. `run` and `selftest` take `--format json`
+  for CI; exit code 0 (pass), 1 (conformance findings/fixture mismatches),
+  or 2 (harness-level failure, e.g. couldn't connect).
 
 ## Parity with the legacy harness
 

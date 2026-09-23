@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lib]
+name = "sapient_test_harness_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sapient-harness"
 path = "src/main.rs"
@@ -16,6 +20,7 @@ sapient-conformance-core.workspace = true
 sapient-session.workspace = true
 prost.workspace = true
 prost-types.workspace = true
+prost-reflect = { version = "0.14", features = ["serde"] }
 tokio.workspace = true
 clap.workspace = true
 serde.workspace = true

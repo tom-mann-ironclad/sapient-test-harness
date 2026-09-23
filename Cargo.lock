@@ -680,6 +680,7 @@ dependencies = [
  "clap",
  "include_dir",
  "prost 0.14.4",
+ "prost-reflect",
  "prost-types 0.14.4",
  "sapient-conformance-core",
  "sapient-session",
