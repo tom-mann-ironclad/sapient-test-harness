@@ -18,7 +18,7 @@ use sapient_conformance_core::{
         Alert, AlertAck, DetectionReport, Error as ErrorMessage, Registration, RegistrationAck,
         SapientMessage, StatusReport, Task, TaskAck,
         alert_ack::AlertAckStatus,
-        registration::{ModeDefinition, ModeType},
+        registration::ModeDefinition,
         sapient_message::Content,
         status_report::System,
         task::{Command as TaskCommand, command::Command as TaskCommandKind},
@@ -29,6 +29,8 @@ use sapient_conformance_core::{
         registration::validate_registration, task_ack::validate_task_ack,
     },
 };
+
+use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
 
 /// Where a [`DmmSession`] currently is in the protocol lifecycle.
 #[derive(Debug, Clone)]
@@ -197,38 +199,68 @@ impl DmmSession {
             return Some(self.registration_ack_reply(false, vec![reason]));
         }
 
-        let default_modes: Vec<&ModeDefinition> = registration
-            .mode_definition
-            .iter()
-            .filter(|mode| mode.mode_type == Some(ModeType::Default as i32))
-            .collect();
-
-        let active_mode = match default_modes.as_slice() {
-            [single] => (*single).clone(),
-            [] => {
+        let active_mode = match resolve_active_mode(&registration.mode_definition) {
+            Ok((mode, ActiveModeSource::Explicit)) => mode,
+            Ok((mode, ActiveModeSource::PermanentNamedDefault)) => {
+                self.findings.push(Finding {
+                    rule_id: "session.registration.default_mode_via_permanent_name".to_string(),
+                    field_path: "registration.mode_definition".to_string(),
+                    severity: Severity::Warning,
+                    message: format!(
+                        "Registration declares no mode with mode_type MODE_TYPE_DEFAULT; using \
+                         the MODE_TYPE_PERMANENT mode named {:?} as the initial active mode, \
+                         matching the legacy DMM convention MODE_TYPE_DEFAULT was introduced to \
+                         replace. Declare MODE_TYPE_DEFAULT explicitly to avoid this warning.",
+                        mode.mode_name
+                    ),
+                });
+                mode
+            }
+            Ok((mode, ActiveModeSource::FirstPermanentMode)) => {
+                self.findings.push(Finding {
+                    rule_id: "session.registration.default_mode_via_first_permanent".to_string(),
+                    field_path: "registration.mode_definition".to_string(),
+                    severity: Severity::Warning,
+                    message: format!(
+                        "Registration declares no mode with mode_type MODE_TYPE_DEFAULT and no \
+                         MODE_TYPE_PERMANENT mode named \"default\"; falling back to the first \
+                         declared MODE_TYPE_PERMANENT mode ({:?}) as the initial active mode. \
+                         Declare MODE_TYPE_DEFAULT explicitly, or name a Permanent mode \
+                         \"Default\", to avoid this warning.",
+                        mode.mode_name
+                    ),
+                });
+                mode
+            }
+            Err(ActiveModeError::NoCandidate) => {
                 self.findings.push(Finding {
                     rule_id: "session.registration.no_default_mode".to_string(),
                     field_path: "registration.mode_definition".to_string(),
                     severity: Severity::Error,
-                    message: "Registration must declare exactly one mode with mode_type \
-                              MODE_TYPE_DEFAULT so the session has a starting mode."
+                    message: "Registration must declare either a mode with mode_type \
+                              MODE_TYPE_DEFAULT, or (for backward compatibility) at least one \
+                              mode with mode_type MODE_TYPE_PERMANENT, so the session has a \
+                              starting mode."
                         .to_string(),
                 });
                 self.state = SessionState::AwaitingRegistration;
                 return Some(self.registration_ack_reply(
                     false,
-                    vec!["No mode declared with mode_type MODE_TYPE_DEFAULT.".to_string()],
+                    vec![
+                        "No mode declared with mode_type MODE_TYPE_DEFAULT or \
+                         MODE_TYPE_PERMANENT."
+                            .to_string(),
+                    ],
                 ));
             }
-            _ => {
+            Err(ActiveModeError::MultipleDefaultModes(count)) => {
                 self.findings.push(Finding {
                     rule_id: "session.registration.multiple_default_modes".to_string(),
                     field_path: "registration.mode_definition".to_string(),
                     severity: Severity::Error,
                     message: format!(
-                        "Registration declares {} modes with mode_type MODE_TYPE_DEFAULT; \
-                         exactly one is required.",
-                        default_modes.len()
+                        "Registration declares {count} modes with mode_type MODE_TYPE_DEFAULT; \
+                         exactly one is required."
                     ),
                 });
                 self.state = SessionState::AwaitingRegistration;

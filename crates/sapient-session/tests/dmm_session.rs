@@ -116,6 +116,134 @@ fn invalid_registration_is_rejected_via_registration_ack_not_error() {
 }
 
 #[test]
+fn registration_with_permanent_mode_named_default_is_accepted_with_warning() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    // Case-insensitive per Tom: DMMs historically looked for exactly this.
+    registration.mode_definition = vec![mode("DEFAULT", ModeType::Permanent)];
+
+    let reply = session
+        .on_bytes(&encode(envelope(
+            ASM_NODE_ID,
+            HARNESS_NODE_ID,
+            0,
+            Content::Registration(registration),
+        )))
+        .expect("Registration should always get a RegistrationAck reply");
+
+    match decode(&reply).content {
+        Some(Content::RegistrationAck(ack)) => assert_eq!(ack.acceptance, Some(true)),
+        other => panic!("expected a RegistrationAck, got {other:?}"),
+    }
+    assert!(matches!(session.state(), SessionState::Registered(_)));
+    let findings = session.findings();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].rule_id,
+        "session.registration.default_mode_via_permanent_name"
+    );
+}
+
+#[test]
+fn registration_with_unnamed_permanent_mode_falls_back_with_warning() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    registration.mode_definition = vec![
+        mode("Wide", ModeType::Permanent),
+        mode("Narrow", ModeType::Permanent),
+    ];
+
+    let reply = session
+        .on_bytes(&encode(envelope(
+            ASM_NODE_ID,
+            HARNESS_NODE_ID,
+            0,
+            Content::Registration(registration),
+        )))
+        .expect("Registration should always get a RegistrationAck reply");
+
+    match decode(&reply).content {
+        Some(Content::RegistrationAck(ack)) => assert_eq!(ack.acceptance, Some(true)),
+        other => panic!("expected a RegistrationAck, got {other:?}"),
+    }
+    match session.state() {
+        SessionState::Registered(contract) => {
+            // Tie-break goes to whichever was declared first.
+            assert_eq!(contract.active_mode.mode_name.as_deref(), Some("Wide"));
+        }
+        other => panic!("expected Registered state, got {other:?}"),
+    }
+    let findings = session.findings();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].rule_id,
+        "session.registration.default_mode_via_first_permanent"
+    );
+}
+
+#[test]
+fn registration_with_no_default_or_permanent_mode_is_rejected() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    registration.mode_definition = vec![mode("Temp", ModeType::Temporary)];
+
+    let reply = session
+        .on_bytes(&encode(envelope(
+            ASM_NODE_ID,
+            HARNESS_NODE_ID,
+            0,
+            Content::Registration(registration),
+        )))
+        .expect("an invalid Registration still gets a RegistrationAck reply");
+
+    match decode(&reply).content {
+        Some(Content::RegistrationAck(ack)) => assert_eq!(ack.acceptance, Some(false)),
+        other => panic!("expected a RegistrationAck, got {other:?}"),
+    }
+    assert!(matches!(
+        session.state(),
+        SessionState::AwaitingRegistration
+    ));
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "session.registration.no_default_mode"),
+    );
+}
+
+#[test]
+fn registration_with_multiple_default_modes_is_rejected() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    registration.mode_definition = vec![mode("A", ModeType::Default), mode("B", ModeType::Default)];
+
+    let reply = session
+        .on_bytes(&encode(envelope(
+            ASM_NODE_ID,
+            HARNESS_NODE_ID,
+            0,
+            Content::Registration(registration),
+        )))
+        .expect("an invalid Registration still gets a RegistrationAck reply");
+
+    match decode(&reply).content {
+        Some(Content::RegistrationAck(ack)) => assert_eq!(ack.acceptance, Some(false)),
+        other => panic!("expected a RegistrationAck, got {other:?}"),
+    }
+    assert!(matches!(
+        session.state(),
+        SessionState::AwaitingRegistration
+    ));
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "session.registration.multiple_default_modes"),
+    );
+}
+
+#[test]
 fn status_report_within_interval_produces_no_finding() {
     let mut session = DmmSession::new(HARNESS_NODE_ID);
     register(&mut session);

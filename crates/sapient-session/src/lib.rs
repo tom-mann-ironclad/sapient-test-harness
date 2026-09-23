@@ -4,6 +4,7 @@
 //! session sequencing, timing, and cross-message correlation that a
 //! single-message validator can't check.
 
+pub mod active_mode;
 pub mod asm;
 pub mod asm_state;
 pub mod dmm;

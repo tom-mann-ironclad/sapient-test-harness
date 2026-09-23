@@ -13,7 +13,7 @@ use sapient_conformance_core::{
     bsi_flex_335_v2_0::{
         Alert, AlertAck, DetectionReport, Error as ErrorMessage, Registration, RegistrationAck,
         SapientMessage, StatusReport, Task, TaskAck,
-        registration::{ModeDefinition, ModeType},
+        registration::ModeDefinition,
         sapient_message::Content,
         task::{Command as TaskCommand, command::Command as TaskCommandKind},
         task_ack::TaskStatus,
@@ -24,6 +24,8 @@ use sapient_conformance_core::{
         task::validate_task,
     },
 };
+
+use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
 
 /// Where an [`AsmSession`] currently is in the protocol lifecycle.
 #[derive(Debug, Clone)]
@@ -222,30 +224,68 @@ impl AsmSession {
             return None;
         }
 
-        let default_modes: Vec<&ModeDefinition> = pending_registration
-            .mode_definition
-            .iter()
-            .filter(|mode| mode.mode_type == Some(ModeType::Default as i32))
-            .collect();
-
-        let active_mode = match default_modes.as_slice() {
-            [single] => (*single).clone(),
-            _ => {
-                // Our own Registration should always declare exactly one
-                // MODE_TYPE_DEFAULT mode -- if it doesn't, that's a bug in
-                // the harness/test scenario that built it, not a protocol
-                // violation by the peer. Record it and stay unregistered
-                // rather than silently picking an arbitrary mode.
+        // Our own Registration should always resolve to an active mode --
+        // if it doesn't, that's a bug in the harness/test scenario that
+        // built it, not a protocol violation by the peer (the DMM already
+        // accepted it). A resolution via the MODE_TYPE_PERMANENT fallback
+        // is accepted (with a warning), not treated as that kind of bug --
+        // see `active_mode` module docs for why.
+        let active_mode = match resolve_active_mode(&pending_registration.mode_definition) {
+            Ok((mode, ActiveModeSource::Explicit)) => mode,
+            Ok((mode, ActiveModeSource::PermanentNamedDefault)) => {
+                self.findings.push(Finding {
+                    rule_id: "session.registration.default_mode_via_permanent_name".to_string(),
+                    field_path: "registration.mode_definition".to_string(),
+                    severity: Severity::Warning,
+                    message: format!(
+                        "Our own Registration declares no mode with mode_type MODE_TYPE_DEFAULT; \
+                         using the MODE_TYPE_PERMANENT mode named {:?} as the initial active \
+                         mode, matching the legacy DMM convention MODE_TYPE_DEFAULT was \
+                         introduced to replace.",
+                        mode.mode_name
+                    ),
+                });
+                mode
+            }
+            Ok((mode, ActiveModeSource::FirstPermanentMode)) => {
+                self.findings.push(Finding {
+                    rule_id: "session.registration.default_mode_via_first_permanent".to_string(),
+                    field_path: "registration.mode_definition".to_string(),
+                    severity: Severity::Warning,
+                    message: format!(
+                        "Our own Registration declares no mode with mode_type MODE_TYPE_DEFAULT \
+                         and no MODE_TYPE_PERMANENT mode named \"default\"; falling back to the \
+                         first declared MODE_TYPE_PERMANENT mode ({:?}) as the initial active \
+                         mode.",
+                        mode.mode_name
+                    ),
+                });
+                mode
+            }
+            Err(ActiveModeError::NoCandidate) => {
                 self.findings.push(Finding {
                     rule_id: "session.registration.no_default_mode".to_string(),
                     field_path: "registration.mode_definition".to_string(),
                     severity: Severity::Error,
+                    message: "Our own Registration declared no mode with mode_type \
+                              MODE_TYPE_DEFAULT and no mode with mode_type MODE_TYPE_PERMANENT \
+                              to fall back to. This is a harness/test scenario bug (the DMM \
+                              already accepted it), not something the peer did wrong."
+                        .to_string(),
+                });
+                self.state = AsmSessionState::NotRegistered;
+                return None;
+            }
+            Err(ActiveModeError::MultipleDefaultModes(count)) => {
+                self.findings.push(Finding {
+                    rule_id: "session.registration.multiple_default_modes".to_string(),
+                    field_path: "registration.mode_definition".to_string(),
+                    severity: Severity::Error,
                     message: format!(
-                        "Our own Registration declared {} modes with mode_type \
+                        "Our own Registration declared {count} modes with mode_type \
                          MODE_TYPE_DEFAULT; exactly one is required. This is a harness/test \
                          scenario bug (the DMM already accepted it), not something the peer \
-                         did wrong.",
-                        default_modes.len()
+                         did wrong."
                     ),
                 });
                 self.state = AsmSessionState::NotRegistered;

@@ -69,6 +69,122 @@ fn registration_rejected_returns_to_not_registered() {
 }
 
 #[test]
+fn registration_with_permanent_mode_named_default_is_accepted_with_warning() {
+    use sapient_conformance_core::bsi_flex_335_v2_0::registration::ModeType;
+
+    let mut session = AsmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    // Case-insensitive per Tom: DMMs historically looked for exactly this.
+    registration.mode_definition = vec![common::mode("DEFAULT", ModeType::Permanent)];
+    session.register(registration);
+
+    session.on_bytes(&encode(envelope(
+        0,
+        Content::RegistrationAck(RegistrationAck {
+            acceptance: Some(true),
+            ack_response_reason: vec![],
+        }),
+    )));
+
+    assert!(matches!(session.state(), AsmSessionState::Registered(_)));
+    let findings = session.findings();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].rule_id,
+        "session.registration.default_mode_via_permanent_name"
+    );
+}
+
+#[test]
+fn registration_with_unnamed_permanent_mode_falls_back_with_warning() {
+    use sapient_conformance_core::bsi_flex_335_v2_0::registration::ModeType;
+
+    let mut session = AsmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    registration.mode_definition = vec![
+        common::mode("Wide", ModeType::Permanent),
+        common::mode("Narrow", ModeType::Permanent),
+    ];
+    session.register(registration);
+
+    session.on_bytes(&encode(envelope(
+        0,
+        Content::RegistrationAck(RegistrationAck {
+            acceptance: Some(true),
+            ack_response_reason: vec![],
+        }),
+    )));
+
+    match session.state() {
+        AsmSessionState::Registered(contract) => {
+            assert_eq!(contract.active_mode.mode_name.as_deref(), Some("Wide"));
+        }
+        other => panic!("expected Registered state, got {other:?}"),
+    }
+    let findings = session.findings();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].rule_id,
+        "session.registration.default_mode_via_first_permanent"
+    );
+}
+
+#[test]
+fn registration_with_no_default_or_permanent_mode_is_a_harness_bug() {
+    use sapient_conformance_core::bsi_flex_335_v2_0::registration::ModeType;
+
+    let mut session = AsmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    registration.mode_definition = vec![common::mode("Temp", ModeType::Temporary)];
+    session.register(registration);
+
+    session.on_bytes(&encode(envelope(
+        0,
+        Content::RegistrationAck(RegistrationAck {
+            acceptance: Some(true),
+            ack_response_reason: vec![],
+        }),
+    )));
+
+    assert!(matches!(session.state(), AsmSessionState::NotRegistered));
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "session.registration.no_default_mode"),
+    );
+}
+
+#[test]
+fn registration_with_multiple_default_modes_is_a_harness_bug() {
+    use sapient_conformance_core::bsi_flex_335_v2_0::registration::ModeType;
+
+    let mut session = AsmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    registration.mode_definition = vec![
+        common::mode("A", ModeType::Default),
+        common::mode("B", ModeType::Default),
+    ];
+    session.register(registration);
+
+    session.on_bytes(&encode(envelope(
+        0,
+        Content::RegistrationAck(RegistrationAck {
+            acceptance: Some(true),
+            ack_response_reason: vec![],
+        }),
+    )));
+
+    assert!(matches!(session.state(), AsmSessionState::NotRegistered));
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "session.registration.multiple_default_modes"),
+    );
+}
+
+#[test]
 fn registration_ack_before_registering_is_a_sequencing_violation() {
     let mut session = AsmSession::new(HARNESS_NODE_ID);
 
