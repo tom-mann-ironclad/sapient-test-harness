@@ -15,15 +15,17 @@ ulid.workspace = true
 uuid.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
 # prost-reflect 0.14 pins prost 0.13 internally (one major behind the
 # workspace's prost 0.14, used by sapient-rs). DynamicMessage only
 # implements the 0.13 `Message` trait, so it's pulled in separately here
 # under an alias purely to call `encode_to_vec` on DynamicMessage; decoding
 # into sapient-rs types still goes through the normal (0.14) `prost::Message`.
+# Real (non-dev) dependencies: `fixture_json` is production code, used by
+# both `tests/parity.rs` and the CLI's `selftest` command.
 prost-reflect = { version = "0.14", features = ["serde"] }
 prost-for-reflect = { package = "prost", version = "0.13" }
+
+[dev-dependencies]
 libtest-mimic = "0.8"
 proptest = "1"
 

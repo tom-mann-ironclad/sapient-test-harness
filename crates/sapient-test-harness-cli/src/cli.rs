@@ -20,6 +20,17 @@ pub struct Cli {
 pub enum Command {
     /// Run a conformance suite against a target implementation.
     Run(RunArgs),
+    /// Run the harness's own validators against its bundled fixture set,
+    /// to confirm the harness itself is healthy before trusting a `run`
+    /// result against it. No network needed.
+    Selftest(SelftestArgs),
+}
+
+#[derive(Args)]
+pub struct SelftestArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
 }
 
 #[derive(Args)]

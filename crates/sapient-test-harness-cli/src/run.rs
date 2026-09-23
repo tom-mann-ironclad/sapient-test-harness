@@ -73,7 +73,7 @@ async fn run_as_dmm(
     max_runtime: Duration,
 ) -> io::Result<(Vec<Finding>, Vec<String>)> {
     let listener = TcpListener::bind(target).await?;
-    println!("Listening on {target} for an ASM to connect...");
+    eprintln!("Listening on {target} for an ASM to connect...");
     let (stream, peer_addr) =
         timeout(connect_timeout, listener.accept())
             .await
@@ -83,7 +83,7 @@ async fn run_as_dmm(
                     format!("no ASM connected to {target} within {connect_timeout:?}"),
                 )
             })??;
-    println!("ASM connected from {peer_addr}.");
+    eprintln!("ASM connected from {peer_addr}.");
 
     let (reader, writer) = split(stream);
     let mut connection = DmmConnection::new(harness_node_id, reader, writer);
@@ -98,7 +98,7 @@ async fn run_as_asm(
     connect_timeout: Duration,
     max_runtime: Duration,
 ) -> io::Result<(Vec<Finding>, Vec<String>)> {
-    println!("Connecting to {target}...");
+    eprintln!("Connecting to {target}...");
     let stream = timeout(connect_timeout, TcpStream::connect(target))
         .await
         .map_err(|_| {
@@ -107,7 +107,7 @@ async fn run_as_asm(
                 format!("could not connect to {target} within {connect_timeout:?}"),
             )
         })??;
-    println!("Connected.");
+    eprintln!("Connected.");
 
     let (reader, writer) = split(stream);
     let mut connection = AsmConnection::new(harness_node_id, reader, writer);

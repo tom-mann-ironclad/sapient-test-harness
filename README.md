@@ -38,11 +38,15 @@ This is a Cargo workspace:
   default v2.0 scenario against a real target over TCP, reusing
   `sapient-session`'s `DmmConnection`/`AsmConnection` directly. `--role
   dmm` listens on `--target` for an ASM to connect in; `--role asm`
-  connects out to a DMM/middleware under test. Text or `--format json`
-  output; exit code 0 (pass), 1 (conformance findings), or 2
-  (harness-level failure, e.g. couldn't connect). See ROADMAP.md
-  Milestone 3 for what's still open (release binaries, `selftest`,
-  quickstart docs).
+  connects out to a DMM/middleware under test. `sapient-harness selftest`
+  runs the harness's own validators against its bundled fixture set (the
+  same 231 fixtures `sapient-conformance-core/tests/parity.rs` checks at
+  build time, embedded into the binary via `include_dir!` so no source
+  tree is needed at run time) -- no network, just a health check that the
+  harness itself is trustworthy before pointing `run` at something. Both
+  commands take `--format json` for CI; exit code 0 (pass), 1
+  (conformance findings/fixture mismatches), or 2 (harness-level failure,
+  e.g. couldn't connect).
 
 ## Parity with the legacy harness
 

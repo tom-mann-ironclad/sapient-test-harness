@@ -5,6 +5,7 @@ mod cli;
 mod report;
 mod run;
 mod scenario;
+mod selftest;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -14,5 +15,6 @@ async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Run(args) => run::run(args).await,
+        Command::Selftest(args) => selftest::selftest(args.format),
     }
 }

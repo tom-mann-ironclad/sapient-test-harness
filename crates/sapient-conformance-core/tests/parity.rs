@@ -6,26 +6,18 @@
 //! coverage means dropping a new fixture file in one of those directories,
 //! not writing Rust.
 
-use std::{error::Error, fs, path::Path};
+use std::{fs, path::Path};
 
 use libtest_mimic::{Arguments, Failed, Trial};
-use prost::Message;
-use prost_for_reflect::Message as _;
-use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
+use prost_reflect::MessageDescriptor;
 use sapient_conformance_core::{
-    bsi_flex_335_v2_0::SapientMessage, validation::sapient_message::validate_sapient_message,
+    fixture_json::sapient_message_descriptor, validation::sapient_message::validate_sapient_message,
 };
-
-const SAPIENT_MESSAGE_TYPE: &str = "sapient_msg.bsi_flex_335_v2_0.SapientMessage";
 
 fn main() {
     let args = Arguments::from_args();
 
-    let pool = DescriptorPool::decode(sapient_rs::FILE_DESCRIPTOR_SET_BYTES)
-        .expect("sapient-rs's embedded file descriptor set should be valid");
-    let message_descriptor = pool
-        .get_message_by_name(SAPIENT_MESSAGE_TYPE)
-        .unwrap_or_else(|| panic!("descriptor pool is missing {SAPIENT_MESSAGE_TYPE}"));
+    let message_descriptor = sapient_message_descriptor();
 
     let mut trials = fixture_trials("True", true, &message_descriptor);
     trials.extend(fixture_trials("False", false, &message_descriptor));
@@ -79,7 +71,10 @@ fn run_fixture(
     // (`InvalidProtocolBufferException`) is treated as an acceptable outcome for a "False"
     // fixture -- a message that isn't even valid SAPIENT JSON is certainly non-conformant --
     // but as a hard failure for a "True" fixture, which must both parse and validate.
-    let message = match decode_fixture(&json, message_descriptor) {
+    let message = match sapient_conformance_core::fixture_json::decode_sapient_message_json(
+        &json,
+        message_descriptor,
+    ) {
         Ok(message) => message,
         Err(_) if !expected => return Ok(()),
         Err(err) => {
@@ -107,17 +102,4 @@ fn run_fixture(
     }
 
     Ok(())
-}
-
-fn decode_fixture(
-    json: &str,
-    message_descriptor: &MessageDescriptor,
-) -> Result<SapientMessage, Box<dyn Error>> {
-    let mut deserializer = serde_json::Deserializer::from_str(json);
-    let dynamic_message =
-        DynamicMessage::deserialize(message_descriptor.clone(), &mut deserializer)?;
-    deserializer.end()?;
-
-    let bytes = dynamic_message.encode_to_vec();
-    Ok(SapientMessage::decode(bytes.as_slice())?)
 }
