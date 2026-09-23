@@ -33,8 +33,16 @@ This is a Cargo workspace:
   genuine interoperability check independent of the hand-built fixtures
   `tests/dmm_session.rs`/`tests/asm_session.rs` each test their own role
   against.
-- `crates/sapient-test-harness-cli` — the `sapient-harness` binary. Just a
-  placeholder today; the real binary will be implemented later.
+- `crates/sapient-test-harness-cli` — the `sapient-harness` binary.
+  `sapient-harness run --role dmm|asm --target <addr>` drives the bundled
+  default v2.0 scenario against a real target over TCP, reusing
+  `sapient-session`'s `DmmConnection`/`AsmConnection` directly. `--role
+  dmm` listens on `--target` for an ASM to connect in; `--role asm`
+  connects out to a DMM/middleware under test. Text or `--format json`
+  output; exit code 0 (pass), 1 (conformance findings), or 2
+  (harness-level failure, e.g. couldn't connect). See ROADMAP.md
+  Milestone 3 for what's still open (release binaries, `selftest`,
+  quickstart docs).
 
 ## Parity with the legacy harness
 

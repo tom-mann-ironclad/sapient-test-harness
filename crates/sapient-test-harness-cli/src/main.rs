@@ -1,10 +1,18 @@
-//! Placeholder binary. The real CLI (scenario running, reporting) is
-//! Milestone 3 in ROADMAP.md; this crate just proves the workspace wiring
-//! and gives `sapient-conformance-core` a binary consumer.
+//! `sapient-harness`: the CLI for the independent SAPIENT / BSI Flex 335
+//! conformance test harness.
 
-fn main() {
-    println!(
-        "sapient-harness {} (placeholder)",
-        env!("CARGO_PKG_VERSION")
-    );
+mod cli;
+mod report;
+mod run;
+mod scenario;
+
+use clap::Parser;
+use cli::{Cli, Command};
+
+#[tokio::main]
+async fn main() -> std::process::ExitCode {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Run(args) => run::run(args).await,
+    }
 }

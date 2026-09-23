@@ -7,6 +7,7 @@
 pub mod asm;
 pub mod asm_state;
 pub mod dmm;
+pub mod fixtures;
 pub mod framing;
 pub mod state;
 

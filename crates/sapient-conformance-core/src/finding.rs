@@ -23,14 +23,15 @@
 /// ICD conformance rule, so only [`Severity::Error`] is currently
 /// produced; `Warning` exists so a future advisory-level check (e.g. "this
 /// is valid but deprecated") doesn't need a breaking type change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Severity {
     Error,
     Warning,
 }
 
 /// A single conformance rule violation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Finding {
     /// Stable identifier for the violated rule, e.g.
     /// `"registration.icd_version.invalid"`. Dot-separated
