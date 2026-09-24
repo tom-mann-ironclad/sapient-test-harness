@@ -99,12 +99,14 @@ async fn sends_non_conformant_messages_from_both_sides_and_warns_without_blockin
             &mut dmm_side,
             &mut dmm_reader,
             &dmm_message,
+            RESPONSE_TIMEOUT,
             RESPONSE_TIMEOUT
         ),
         send_message(
             &mut asm_side,
             &mut asm_reader,
             &asm_message,
+            RESPONSE_TIMEOUT,
             RESPONSE_TIMEOUT
         ),
     );
@@ -165,6 +167,7 @@ async fn sending_a_conformant_message_produces_no_warning() {
         &mut reader,
         &valid_registration_ack(),
         Duration::from_millis(50),
+        RESPONSE_TIMEOUT,
     )
     .await
     .expect("send over an in-memory duplex should not I/O-error");
@@ -183,6 +186,7 @@ async fn no_reply_within_the_timeout_is_reported_not_an_error() {
         &mut reader,
         &valid_registration_ack(),
         Duration::from_millis(50),
+        RESPONSE_TIMEOUT,
     )
     .await
     .expect("send over an in-memory duplex should not I/O-error");
@@ -201,7 +205,13 @@ async fn peer_disconnecting_before_replying_is_reported_not_an_error() {
 
     let mut reader = FrameReader::default();
     let (result, _) = tokio::join!(
-        send_message(&mut a, &mut reader, &message, RESPONSE_TIMEOUT),
+        send_message(
+            &mut a,
+            &mut reader,
+            &message,
+            RESPONSE_TIMEOUT,
+            RESPONSE_TIMEOUT
+        ),
         async {
             tokio::time::sleep(Duration::from_millis(10)).await;
             drop(b);
@@ -231,6 +241,7 @@ async fn successive_sends_resume_partial_late_replies() {
             &mut reader,
             &expected,
             Duration::from_millis(10),
+            RESPONSE_TIMEOUT,
         )
         .await
         .unwrap();
@@ -239,9 +250,15 @@ async fn successive_sends_resume_partial_late_replies() {
         peer.write_all(&wire[split..]).await.unwrap();
         write_frame(&mut peer, &raw).await.unwrap();
         for _ in 0..2 {
-            let next = send_message(&mut stream, &mut reader, &expected, RESPONSE_TIMEOUT)
-                .await
-                .unwrap();
+            let next = send_message(
+                &mut stream,
+                &mut reader,
+                &expected,
+                RESPONSE_TIMEOUT,
+                RESPONSE_TIMEOUT,
+            )
+            .await
+            .unwrap();
             match next.reply {
                 ReplyOutcome::Reply(reply) => assert_eq!(*reply, expected),
                 other => panic!("expected intact late reply, got {other:?}"),
@@ -249,4 +266,22 @@ async fn successive_sends_resume_partial_late_replies() {
             assert_eq!(read_frame(&mut peer).await.unwrap(), Some(raw.clone()));
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn blocked_raw_send_has_a_separate_write_timeout() {
+    let (mut stream, _peer) = tokio::io::duplex(1);
+    let mut reader = FrameReader::default();
+    let start = tokio::time::Instant::now();
+    let error = send_message(
+        &mut stream,
+        &mut reader,
+        &valid_registration_ack(),
+        Duration::from_secs(60),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(tokio::time::Instant::now() - start, Duration::from_secs(2));
 }

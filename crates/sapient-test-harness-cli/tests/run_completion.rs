@@ -96,9 +96,7 @@ async fn silent_peers_cannot_pass() {
     let (stream, _peer) = duplex(65536);
     let (r, w) = split(stream);
     let mut asm = AsmConnection::new(NODE, r, w);
-    let result = run_asm_scenario(&mut asm, Instant::now() + Duration::from_secs(1))
-        .await
-        .unwrap();
+    let result = run_asm_scenario(&mut asm, Instant::now() + Duration::from_secs(1)).await;
     let result = report(Role::Asm, result, asm.take_findings());
     verdict(&result, RunOutcome::Incomplete);
     check(&result, Check::Registration, CheckStatus::Incomplete);
@@ -106,9 +104,7 @@ async fn silent_peers_cannot_pass() {
     let (stream, _peer) = duplex(65536);
     let (r, w) = split(stream);
     let mut dmm = DmmConnection::new(NODE, r, w);
-    let result = run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(1))
-        .await
-        .unwrap();
+    let result = run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(1)).await;
     verdict(
         &report(Role::Dmm, result, dmm.take_findings()),
         RunOutcome::Incomplete,
@@ -121,9 +117,7 @@ async fn immediate_disconnects_cannot_pass() {
     drop(peer);
     let (r, w) = split(stream);
     let mut dmm = DmmConnection::new(NODE, r, w);
-    let result = run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10))
-        .await
-        .unwrap();
+    let result = run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)).await;
     verdict(
         &report(Role::Dmm, result, dmm.take_findings()),
         RunOutcome::Incomplete,
@@ -140,7 +134,7 @@ async fn immediate_disconnects_cannot_pass() {
         },
     );
     verdict(
-        &report(Role::Asm, result.unwrap(), asm.take_findings()),
+        &report(Role::Asm, result, asm.take_findings()),
         RunOutcome::Incomplete,
     );
 }
@@ -198,21 +192,26 @@ async fn asm_case(case: u8) -> RunReport {
         if case == 4 {
             assert!(matches!(receive(&mut peer).await, Content::Error(_)));
         }
-        assert!(matches!(receive(&mut peer).await, Content::StatusReport(_)));
+        if matches!(case, 1 | 4 | 6) {
+            // Keep the peer open through the deadline; teardown cannot write after it.
+            sleep(Duration::from_secs(11)).await;
+        } else {
+            assert!(matches!(receive(&mut peer).await, Content::StatusReport(_)));
+        }
     };
     let (result, ()) = tokio::join!(
         run_asm_scenario(&mut asm, Instant::now() + Duration::from_secs(10)),
         target
     );
-    report(Role::Asm, result.unwrap(), asm.take_findings())
+    report(Role::Asm, result, asm.take_findings())
 }
 
 #[tokio::test(start_paused = true)]
-async fn missing_alert_ack_cannot_pass_even_after_goodbye() {
+async fn missing_alert_ack_cannot_pass_or_send_goodbye_after_deadline() {
     let result = asm_case(1).await;
     verdict(&result, RunOutcome::Incomplete);
     check(&result, Check::AlertAck, CheckStatus::Incomplete);
-    check(&result, Check::Goodbye, CheckStatus::Completed);
+    check(&result, Check::Goodbye, CheckStatus::Incomplete);
 }
 
 #[tokio::test(start_paused = true)]
@@ -329,7 +328,7 @@ async fn dmm_case(case: u8) -> RunReport {
         run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
         target
     );
-    report(Role::Dmm, result.unwrap(), dmm.take_findings())
+    report(Role::Dmm, result, dmm.take_findings())
 }
 
 #[tokio::test(start_paused = true)]
@@ -422,7 +421,7 @@ async fn reregistration_before_probe_uses_new_contract_and_requires_ack() {
         run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
         target
     );
-    let result = report(Role::Dmm, result.unwrap(), dmm.take_findings());
+    let result = report(Role::Dmm, result, dmm.take_findings());
     verdict(&result, RunOutcome::Incomplete);
     check(&result, Check::TaskAck, CheckStatus::Incomplete);
 }
@@ -450,7 +449,7 @@ async fn deadline_after_registration_before_alert_is_incomplete() {
         run_asm_scenario(&mut asm, Instant::now() + Duration::from_secs(1)),
         target
     );
-    let result = report(Role::Asm, result.unwrap(), asm.take_findings());
+    let result = report(Role::Asm, result, asm.take_findings());
     verdict(&result, RunOutcome::Incomplete);
     check(&result, Check::Registration, CheckStatus::Completed);
     check(&result, Check::AlertAck, CheckStatus::Incomplete);
@@ -469,4 +468,194 @@ async fn invalid_registration_ack_does_not_complete_check() {
     let result = asm_case(7).await;
     verdict(&result, RunOutcome::Failed);
     check(&result, Check::Registration, CheckStatus::Incomplete);
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_asm_send_is_bounded_and_preserves_prior_checks() {
+    for (completed_sends, stage) in [
+        (0, "send_registration"),
+        (1, "send_status_report"),
+        (2, "send_detection_report"),
+        (3, "send_alert"),
+        (4, "send_goodbye"),
+    ] {
+        let (r, mut inbound) = duplex(65536);
+        let (w, mut outbound) = duplex(1);
+        let mut asm = AsmConnection::new(NODE, r, w);
+        let start = Instant::now();
+        let target = async {
+            for index in 0..completed_sends {
+                let content = receive(&mut outbound).await;
+                if index == 0 {
+                    send(
+                        &mut inbound,
+                        Content::RegistrationAck(RegistrationAck {
+                            acceptance: Some(true),
+                            ack_response_reason: vec![],
+                        }),
+                    )
+                    .await;
+                }
+                if let Content::Alert(alert) = content {
+                    send(
+                        &mut inbound,
+                        Content::AlertAck(AlertAck {
+                            alert_id: alert.alert_id,
+                            alert_ack_status: Some(1),
+                            reason: vec![],
+                        }),
+                    )
+                    .await;
+                }
+            }
+            sleep(Duration::from_secs(6)).await;
+        };
+        let (result, ()) = tokio::join!(
+            async {
+                let result = run_asm_scenario(&mut asm, start + Duration::from_secs(5)).await;
+                assert_eq!(Instant::now(), start + Duration::from_secs(5));
+                result
+            },
+            target
+        );
+        let report = report(Role::Asm, result, asm.take_findings());
+        assert_eq!(report.exit_code(), ExitCode::from(2));
+        assert_eq!(report.outcome, RunOutcome::Incomplete);
+        let error = report.operational_error.as_ref().unwrap();
+        assert_eq!(error.stage, stage);
+        assert_eq!(error.kind, "TimedOut");
+        check(&report, Check::Goodbye, CheckStatus::Incomplete);
+        if completed_sends >= 2 {
+            check(&report, Check::StatusReport, CheckStatus::Completed);
+        }
+        if completed_sends >= 3 {
+            check(&report, Check::DetectionReport, CheckStatus::Completed);
+        }
+        if completed_sends >= 4 {
+            check(&report, Check::AlertAck, CheckStatus::Completed);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn blocked_automatic_reply_keeps_findings_and_cannot_pass() {
+    let (r, mut inbound) = duplex(65536);
+    let (w, _outbound) = duplex(1);
+    let mut dmm = DmmConnection::new(NODE, r, w);
+    let raw = SapientMessage {
+        content: Some(Content::Registration(fixtures::valid_registration())),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    inbound.write_u32_le(raw.len() as u32).await.unwrap();
+    inbound.write_all(&raw).await.unwrap();
+    let start = Instant::now();
+    let result = run_dmm_scenario(&mut dmm, start + Duration::from_secs(1)).await;
+    assert_eq!(Instant::now(), start + Duration::from_secs(1));
+    let report = report(Role::Dmm, result, dmm.take_findings());
+    assert_eq!(report.exit_code(), ExitCode::from(2));
+    assert_eq!(report.outcome, RunOutcome::Failed);
+    assert_eq!(report.findings.len(), 2);
+    assert_eq!(report.operational_error.unwrap().stage, "receive_or_reply");
+}
+
+#[tokio::test(start_paused = true)]
+async fn blocked_dmm_probe_keeps_registration_and_status_progress() {
+    let (r, mut inbound) = duplex(65536);
+    let (w, mut outbound) = duplex(1);
+    let mut dmm = DmmConnection::new(NODE, r, w);
+    let start = Instant::now();
+    let target = async {
+        send(
+            &mut inbound,
+            Content::Registration(fixtures::valid_registration()),
+        )
+        .await;
+        receive(&mut outbound).await;
+        send(
+            &mut inbound,
+            Content::StatusReport(StatusReport {
+                report_id: Some(ID.into()),
+                system: Some(1),
+                info: Some(1),
+                mode: Some("Default".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        sleep(Duration::from_secs(2)).await;
+    };
+    let (result, ()) = tokio::join!(
+        run_dmm_scenario(&mut dmm, start + Duration::from_secs(1)),
+        target
+    );
+    let report = report(Role::Dmm, result, dmm.take_findings());
+    check(&report, Check::Registration, CheckStatus::Completed);
+    check(&report, Check::StatusReport, CheckStatus::Completed);
+    check(&report, Check::TaskAck, CheckStatus::Incomplete);
+    assert_eq!(
+        report.operational_error.as_ref().unwrap().stage,
+        "send_task"
+    );
+    assert_eq!(report.exit_code(), ExitCode::from(2));
+}
+
+#[tokio::test]
+async fn connection_reset_keeps_preceding_findings_and_progress() {
+    // Deterministic reset after a complete frame, independent of OS TCP buffering.
+    struct ResetAfter {
+        bytes: Vec<u8>,
+        offset: usize,
+    }
+    impl tokio::io::AsyncRead for ResetAfter {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.offset == self.bytes.len() {
+                return std::task::Poll::Ready(Err(std::io::ErrorKind::ConnectionReset.into()));
+            }
+            let count = buf.remaining().min(self.bytes.len() - self.offset);
+            buf.put_slice(&self.bytes[self.offset..self.offset + count]);
+            self.offset += count;
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+    let raw = SapientMessage {
+        content: Some(Content::Registration(fixtures::valid_registration())),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    let mut bytes = (raw.len() as u32).to_le_bytes().to_vec();
+    bytes.extend(raw);
+    let mut dmm = DmmConnection::new(NODE, ResetAfter { bytes, offset: 0 }, tokio::io::sink());
+    let result = run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(1)).await;
+    let report = report(Role::Dmm, result, dmm.take_findings());
+    assert_eq!(report.findings.len(), 2);
+    check(&report, Check::Registration, CheckStatus::Completed);
+    assert_eq!(
+        report.operational_error.as_ref().unwrap().kind,
+        "ConnectionReset"
+    );
+    assert_eq!(report.outcome, RunOutcome::Failed);
+    assert_eq!(report.exit_code(), ExitCode::from(2));
+}
+
+#[test]
+fn operational_failure_prevents_pass_even_after_all_checks_complete() {
+    let mut scenario = ScenarioResult::new(&[Check::Registration]);
+    scenario.complete(Check::Registration);
+    scenario.record_error(
+        "receive_or_reply",
+        std::io::ErrorKind::ConnectionReset.into(),
+    );
+    let report = report(Role::Dmm, scenario, vec![]);
+    assert_eq!(report.outcome, RunOutcome::Incomplete);
+    assert!(!report.passed);
+    assert_eq!(report.exit_code(), ExitCode::from(2));
+    assert_eq!(
+        serde_json::to_value(report).unwrap()["operational_error"]["kind"],
+        "ConnectionReset"
+    );
 }

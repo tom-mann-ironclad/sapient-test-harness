@@ -79,6 +79,10 @@ pub struct SendArgs {
     /// to the next `--file`.
     #[arg(long, default_value_t = 10)]
     pub response_timeout_secs: u64,
+
+    /// Maximum seconds to transmit each file. A timeout closes the connection.
+    #[arg(long, default_value_t = 30)]
+    pub write_timeout_secs: u64,
 }
 
 #[derive(Args)]
@@ -113,11 +117,11 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 30)]
     pub connect_timeout_secs: u64,
 
-    /// Overall cap on the run once connected, in seconds. For `--role dmm`
+    /// Overall cap on reads and writes once connected, in seconds. For `--role dmm`
     /// this also bounds how long the harness will wait for the ASM under
     /// test to end the session on its own terms (a `GoodBye` `StatusReport`
-    /// or a disconnect) -- the harness never disconnects a DMM-role
-    /// session itself.
+    /// or a disconnect). The connection closes when the run ends, including
+    /// on deadline expiry or an I/O failure.
     #[arg(long, default_value_t = 120)]
     pub max_runtime_secs: u64,
 

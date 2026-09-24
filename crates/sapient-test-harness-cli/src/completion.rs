@@ -1,6 +1,8 @@
 //! Required steps of the bundled scenarios, independent of conformance findings.
 
+use crate::cli::Role;
 use serde::Serialize;
+use std::io;
 
 /// A named step in the bundled scenario. These identify coverage, not protocol
 /// rules: completing a step does not imply that its traffic had no findings.
@@ -54,9 +56,45 @@ pub struct ScenarioResult {
     pub checks: Vec<ScenarioCheck>,
     /// Human-readable observations; notes alone never determine success.
     pub notes: Vec<String>,
+    /// Operational failure, independent of protocol findings and check completion.
+    pub operational_error: Option<OperationalError>,
+}
+
+/// Why execution stopped. Transport errors are not automatically protocol violations.
+#[derive(Debug, Serialize)]
+pub struct OperationalError {
+    /// Operation active when the failure occurred (including automatic replies).
+    pub stage: String,
+    /// Rust I/O error category, retained separately from the human-readable detail.
+    pub kind: String,
+    /// Diagnostic supplied by the transport or deadline handler.
+    pub message: String,
 }
 
 impl ScenarioResult {
+    /// Declare the bundled scenario even when connection setup fails.
+    pub fn for_role(role: Role) -> Self {
+        match role {
+            Role::Dmm => Self::new(&[Check::Registration, Check::StatusReport, Check::TaskAck]),
+            Role::Asm => Self::new(&[
+                Check::Registration,
+                Check::StatusReport,
+                Check::DetectionReport,
+                Check::AlertAck,
+                Check::Goodbye,
+            ]),
+        }
+    }
+
+    /// Preserve the execution failure without discarding earlier evidence.
+    pub fn record_error(&mut self, stage: &str, error: io::Error) {
+        self.operational_error = Some(OperationalError {
+            stage: stage.into(),
+            kind: format!("{:?}", error.kind()),
+            message: error.to_string(),
+        });
+    }
+
     /// Declare the scenario's required steps, all initially incomplete.
     /// Callers should supply each check once; duplicates are not deduplicated.
     ///
@@ -77,6 +115,7 @@ impl ScenarioResult {
                 })
                 .collect(),
             notes: Vec::new(),
+            operational_error: None,
         }
     }
 

@@ -148,6 +148,13 @@ where
         }
     }
 
+    /// Whether an outbound frame is still partially or wholly unsent.
+    /// A run deadline in this state is an interrupted write, not a completed
+    /// observation window. The caller must discard the connection when ending a run.
+    pub fn has_pending_write(&self) -> bool {
+        self.frame_writer.is_pending()
+    }
+
     /// Poll until the peer disconnects, auto-replying to everything that
     /// needs it along the way. Convenience for scenarios that don't need
     /// to interleave their own sends with reads (e.g. "register, then

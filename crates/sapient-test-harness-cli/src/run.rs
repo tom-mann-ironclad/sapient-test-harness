@@ -62,8 +62,15 @@ pub async fn run(args: RunArgs) -> ExitCode {
     let (findings, scenario) = match outcome {
         Ok(result) => result,
         Err(err) => {
-            eprintln!("error: {err}");
-            return ExitCode::from(2);
+            let mut scenario = ScenarioResult::for_role(args.role);
+            scenario.record_error(
+                match args.role {
+                    Role::Asm => "connect",
+                    Role::Dmm => "listen_or_accept",
+                },
+                err,
+            );
+            (Vec::new(), scenario)
         }
     };
 
@@ -110,8 +117,15 @@ async fn run_as_dmm(
         FrameReader::new(max_frame_bytes)
             .with_large_message_warning(crate::cli::warn_large_message),
     );
-    let deadline = Instant::now() + max_runtime;
-    let scenario = run_dmm_scenario(&mut connection, deadline).await?;
+    let Some(deadline) = Instant::now().checked_add(max_runtime) else {
+        let mut scenario = ScenarioResult::for_role(Role::Dmm);
+        scenario.record_error(
+            "configure_deadline",
+            io::Error::new(io::ErrorKind::InvalidInput, "max runtime is too large"),
+        );
+        return Ok((connection.take_findings(), scenario));
+    };
+    let scenario = run_dmm_scenario(&mut connection, deadline).await;
     Ok((connection.take_findings(), scenario))
 }
 
@@ -141,7 +155,14 @@ async fn run_as_asm(
         FrameReader::new(max_frame_bytes)
             .with_large_message_warning(crate::cli::warn_large_message),
     );
-    let deadline = Instant::now() + max_runtime;
-    let scenario = run_asm_scenario(&mut connection, deadline).await?;
+    let Some(deadline) = Instant::now().checked_add(max_runtime) else {
+        let mut scenario = ScenarioResult::for_role(Role::Asm);
+        scenario.record_error(
+            "configure_deadline",
+            io::Error::new(io::ErrorKind::InvalidInput, "max runtime is too large"),
+        );
+        return Ok((connection.take_findings(), scenario));
+    };
+    let scenario = run_asm_scenario(&mut connection, deadline).await;
     Ok((connection.take_findings(), scenario))
 }

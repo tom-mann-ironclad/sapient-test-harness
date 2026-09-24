@@ -63,7 +63,9 @@ pub enum ReplyOutcome {
 
 /// Validates `message` against this crate's own conformance rules, then
 /// sends it over `stream` regardless of the validation outcome, and waits
-/// up to `response_timeout` for one reply frame. Only a real I/O failure
+/// up to `response_timeout` for one reply frame. Transmission is bounded separately
+/// by `write_timeout`; discard the stream on a write timeout or other I/O error.
+/// Only an I/O failure (including a write timeout)
 /// (not an invalid outgoing message, not an undecodable or absent reply)
 /// returns `Err`. Retain `reader` for the lifetime of this stream so a timeout
 /// can resume a partial reply on the next call. Replies are observed in wire
@@ -73,13 +75,21 @@ pub async fn send_message<S>(
     reader: &mut FrameReader,
     message: &SapientMessage,
     response_timeout: Duration,
+    write_timeout: Duration,
 ) -> io::Result<SendOutcome>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let validation = validate_sapient_message(message.clone());
 
-    write_frame(stream, &message.encode_to_vec()).await?;
+    timeout(write_timeout, write_frame(stream, &message.encode_to_vec()))
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "message write timed out; connection must be closed",
+            )
+        })??;
 
     let reply = match timeout(response_timeout, reader.read(stream)).await {
         Ok(Ok(Some(raw))) => {
@@ -134,7 +144,14 @@ pub async fn send(args: SendArgs) -> ExitCode {
             }
         };
 
-        let outcome = match send_message(&mut stream, &mut reader, &message, response_timeout).await
+        let outcome = match send_message(
+            &mut stream,
+            &mut reader,
+            &message,
+            response_timeout,
+            Duration::from_secs(args.write_timeout_secs),
+        )
+        .await
         {
             Ok(outcome) => outcome,
             Err(err) => {

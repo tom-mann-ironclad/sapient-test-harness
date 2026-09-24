@@ -245,10 +245,100 @@ async fn configured_receive_limit_stops_at_the_header_with_a_resource_diagnostic
         peer.write_u32_le(33).await.unwrap();
         let output = child.wait_with_output().await.unwrap();
         assert_eq!(output.status.code(), Some(2));
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(stderr.contains("configured receive limit of 32 bytes"));
-        assert!(stderr.contains("not a conformance finding"));
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("configured receive limit of 32 bytes"));
+        assert!(text.contains("not a conformance finding"));
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn truncated_payload_retains_findings_progress_and_json() {
+    timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &listener.local_addr().unwrap().to_string(),
+                "--format",
+                "json",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        receive(&mut peer).await;
+        send(
+            &mut peer,
+            Content::RegistrationAck(RegistrationAck {
+                acceptance: Some(true),
+                ack_response_reason: vec![],
+            }),
+            true,
+        )
+        .await;
+        receive(&mut peer).await;
+        receive(&mut peer).await;
+        peer.write_u32_le(5).await.unwrap();
+        peer.write_all(&[1, 2]).await.unwrap();
+        peer.shutdown().await.unwrap();
+        let output = child.wait_with_output().await.unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["outcome"], "failed");
+        assert_eq!(report["findings"].as_array().unwrap().len(), 3);
+        assert_eq!(report["operational_error"]["kind"], "UnexpectedEof");
+        assert_eq!(report["operational_error"]["stage"], "receive_or_reply");
+        assert_eq!(report["checks"][0]["status"], "completed");
+        assert_eq!(report["checks"][2]["status"], "completed");
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn connection_failures_and_accept_timeouts_produce_json() {
+    for role in ["asm", "dmm"] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        drop(listener);
+        let output = timeout(
+            Duration::from_secs(5),
+            Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+                .args([
+                    "run",
+                    "--role",
+                    role,
+                    "--target",
+                    &address,
+                    "--connect-timeout-secs",
+                    "0",
+                    "--format",
+                    "json",
+                ])
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["outcome"], "incomplete");
+        assert_eq!(report["passed"], false);
+        assert!(report["operational_error"].is_object());
+        assert!(
+            report["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|check| check["status"] == "incomplete")
+        );
+    }
 }

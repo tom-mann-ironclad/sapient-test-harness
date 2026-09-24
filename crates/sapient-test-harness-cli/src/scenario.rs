@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use crate::completion::{Check, ScenarioResult};
 
+use crate::cli::Role;
 use sapient_conformance_core::bsi_flex_335_v2_0::{
     Alert, DetectionReport, Location, LocationCoordinateSystem, LocationDatum, StatusReport, Task,
     alert::{AlertStatus, AlertType},
@@ -38,7 +39,7 @@ use sapient_session::{
     fixtures,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::time::{Instant, timeout};
+use tokio::time::{Instant, timeout, timeout_at};
 use ulid::Ulid;
 
 /// How often a long wait (see `dmm_poll_with_heartbeat`/
@@ -129,16 +130,60 @@ where
 /// whatever non-default mode the ASM's own `Registration` declared, if
 /// any) to exercise `Task`/`TaskAck` and mode-change handling; everything
 /// else is reactive, auto-replying via `DmmConnection`.
+/// Returns partial progress and operational errors even if I/O fails. All waits
+/// and writes share `deadline`. Drop the connection when this run returns;
+/// pending frames must not be reused after a run-ending deadline or I/O error.
 pub async fn run_dmm_scenario<R, W>(
     connection: &mut DmmConnection<R, W>,
     deadline: Instant,
-) -> io::Result<ScenarioResult>
+) -> ScenarioResult
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut result =
-        ScenarioResult::new(&[Check::Registration, Check::StatusReport, Check::TaskAck]);
+    let mut result = ScenarioResult::for_role(Role::Dmm);
+    let mut stage = "starting_scenario";
+    // Progress lives outside the cancellable future so every exit retains it.
+    let outcome = timeout_at(
+        deadline,
+        dmm_steps(connection, deadline, &mut result, &mut stage),
+    )
+    .await;
+    match outcome {
+        Ok(Err(error)) => result.record_error(stage, error),
+        Err(_) if connection.has_pending_write() => result.record_error(
+            stage,
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "run deadline expired with an unfinished write; connection must be closed",
+            ),
+        ),
+        Err(_) => note(&mut result.notes, "Reached the run's max runtime."),
+        Ok(Ok(())) => {}
+    }
+    // A heartbeat/optional wait may observe the same deadline before the outer timer.
+    if result.operational_error.is_none() && connection.has_pending_write() {
+        result.record_error(
+            stage,
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "run ended with an unfinished reply; connection must be closed",
+            ),
+        );
+    }
+    result
+}
+
+async fn dmm_steps<R, W>(
+    connection: &mut DmmConnection<R, W>,
+    deadline: Instant,
+    result: &mut ScenarioResult,
+    stage: &mut &'static str,
+) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let mut status_received = false;
     let mut target_mode = None;
     let mut issued_task_id = None;
@@ -175,10 +220,12 @@ where
                 }),
                 ..Default::default()
             };
+            *stage = "send_task";
             connection.issue_task(&task).await?;
             issued_task_id = Some(task_id);
         }
 
+        *stage = "receive_or_reply";
         match dmm_poll_with_heartbeat(connection, deadline, "for the ASM").await? {
             PollWait::Processed => match connection.take_event() {
                 Some(DmmEvent::RegistrationAccepted) => {
@@ -238,7 +285,7 @@ where
         }
     }
 
-    Ok(result)
+    Ok(())
 }
 
 /// Drives an ASM-role run against a DMM/middleware under test: registers,
@@ -248,25 +295,65 @@ where
 /// `StatusReport`. Unlike the DMM role, the ASM role legitimately manages
 /// its own session lifecycle, so concluding the run this way is correct
 /// protocol behaviour, not the harness cutting the peer off.
+/// Returns partial progress and operational errors even if I/O fails. All waits
+/// and writes share `deadline`. Drop the connection when this run returns;
+/// graceful teardown is attempted only within the remaining runtime.
 pub async fn run_asm_scenario<R, W>(
     connection: &mut AsmConnection<R, W>,
     deadline: Instant,
-) -> io::Result<ScenarioResult>
+) -> ScenarioResult
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut result = ScenarioResult::new(&[
-        Check::Registration,
-        Check::StatusReport,
-        Check::DetectionReport,
-        Check::AlertAck,
-        Check::Goodbye,
-    ]);
+    let mut result = ScenarioResult::for_role(Role::Asm);
+    let mut stage = "starting_scenario";
+    // Progress lives outside the cancellable future so every exit retains it.
+    let outcome = timeout_at(
+        deadline,
+        asm_steps(connection, deadline, &mut result, &mut stage),
+    )
+    .await;
+    match outcome {
+        Ok(Err(error)) => result.record_error(stage, error),
+        Err(_) if connection.has_pending_write() => result.record_error(
+            stage,
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "run deadline expired with an unfinished write; connection must be closed",
+            ),
+        ),
+        Err(_) => note(&mut result.notes, "Reached the run's max runtime."),
+        Ok(Ok(())) => {}
+    }
+    // A heartbeat/optional wait may observe the same deadline before the outer timer.
+    if result.operational_error.is_none() && connection.has_pending_write() {
+        result.record_error(
+            stage,
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "run ended with an unfinished reply; connection must be closed",
+            ),
+        );
+    }
+    result
+}
 
+async fn asm_steps<R, W>(
+    connection: &mut AsmConnection<R, W>,
+    deadline: Instant,
+    result: &mut ScenarioResult,
+    stage: &mut &'static str,
+) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    *stage = "send_registration";
     connection.register(fixtures::valid_registration()).await?;
 
     loop {
+        *stage = "receive_or_reply";
         match asm_poll_with_heartbeat(connection, deadline, "for a RegistrationAck").await? {
             PollWait::Processed => match connection.take_event() {
                 Some(AsmEvent::RegistrationAccepted) => {
@@ -274,7 +361,7 @@ where
                     break;
                 }
                 Some(AsmEvent::RegistrationRejected | AsmEvent::RegistrationFailed) => {
-                    return Ok(result);
+                    return Ok(());
                 }
                 _ => {}
             },
@@ -283,14 +370,14 @@ where
                     &mut result.notes,
                     "DMM under test disconnected before acknowledging our Registration.",
                 );
-                return Ok(result);
+                return Ok(());
             }
             PollWait::DeadlineReached => {
                 note(
                     &mut result.notes,
                     "Timed out waiting for a RegistrationAck from the DMM under test.",
                 );
-                return Ok(result);
+                return Ok(());
             }
         }
     }
@@ -301,6 +388,7 @@ where
         _ => None,
     };
 
+    *stage = "send_status_report";
     connection
         .issue_status_report(StatusReport {
             report_id: Some(Ulid::new().to_string()),
@@ -319,6 +407,7 @@ where
 
     result.complete(Check::StatusReport);
 
+    *stage = "send_detection_report";
     connection
         .issue_detection_report(DetectionReport {
             report_id: Some(Ulid::new().to_string()),
@@ -364,6 +453,7 @@ where
     // and short enough that it doesn't need a heartbeat of its own.
     let short_wait = Duration::from_secs(2).min(deadline.saturating_duration_since(Instant::now()));
     if !short_wait.is_zero() {
+        *stage = "receive_or_reply";
         match timeout(short_wait, connection.poll_once()).await {
             Ok(Ok(true)) => {
                 // No required check depends on this optional observation.
@@ -375,7 +465,7 @@ where
             }
             Ok(Ok(false)) => {
                 note(&mut result.notes, "DMM under test disconnected.");
-                return Ok(result);
+                return Ok(());
             }
             Ok(Err(err)) => return Err(err),
             Err(_elapsed) => {}
@@ -387,10 +477,11 @@ where
             &mut result.notes,
             "Reached the run's max runtime before sending the Alert.",
         );
-        return Ok(result);
+        return Ok(());
     }
 
     let alert_id = Ulid::new().to_string();
+    *stage = "send_alert";
     connection
         .issue_alert(Alert {
             alert_id: Some(alert_id.clone()),
@@ -409,6 +500,7 @@ where
         .await?;
 
     loop {
+        *stage = "receive_or_reply";
         match asm_poll_with_heartbeat(connection, deadline, "for an AlertAck").await? {
             PollWait::Processed => {
                 if let Some(AsmEvent::AlertAcknowledged {
@@ -426,7 +518,7 @@ where
                     &mut result.notes,
                     "DMM under test disconnected before acknowledging our Alert.",
                 );
-                return Ok(result);
+                return Ok(());
             }
             PollWait::DeadlineReached => {
                 note(
@@ -438,6 +530,11 @@ where
         }
     }
 
+    // Never start graceful teardown after the run deadline has already elapsed.
+    if Instant::now() >= deadline {
+        return Ok(());
+    }
+    *stage = "send_goodbye";
     connection
         .issue_status_report(StatusReport {
             report_id: Some(Ulid::new().to_string()),
@@ -459,5 +556,5 @@ where
         "Sent a GoodBye StatusReport to end the session gracefully.",
     );
 
-    Ok(result)
+    Ok(())
 }

@@ -74,10 +74,10 @@ pass/fail report. Useful flags:
 
 - `--connect-timeout-secs <N>` (default 30) -- how long to wait for the
   other side to connect.
-- `--max-runtime-secs <N>` (default 120) -- overall cap on the run. For
-  `--role dmm` this also bounds how long the harness waits for the Edge
-  Node to end the session itself -- the harness never disconnects a
-  C2-role session first.
+- `--max-runtime-secs <N>` (default 120) -- cap on all reads and writes once
+  connected, including automatic replies and GoodBye. The connection closes at
+  the end of the run. A deadline during a blocked write is an operational error;
+  an ordinary observation deadline retains the existing completion verdict.
 - `--format json` -- machine-readable output for CI, on `stdout` only
   (progress messages go to `stderr`, so `stdout` stays clean JSON).
 - `--node-id <uuid>` -- override the random node ID the harness stamps on
@@ -165,6 +165,14 @@ that the peer implements every feature of the standard.
 `2` a harness-level failure (couldn't connect, bad arguments, etc.) --
 distinct from `1` so CI can distinguish a failed/incomplete scenario from an
 operational failure.
+
+`run` also emits a report when connection setup or session I/O fails. Earlier
+findings, notes, and completed checks are retained. An `operational_error` object
+records `stage`, `kind`, and `message`. Such a run exits **2** even if conformance
+findings also exist; its outcome is `failed` when there are error findings and
+`incomplete` otherwise. A transport failure alone is not a protocol violation.
+Clean EOF and ordinary reply/observation timeouts retain the existing completion
+rules. CLI argument parsing and unsupported suite errors remain command errors.
 
 ### JSON output
 
@@ -287,6 +295,10 @@ rules first and prints a warning if it fails, but sends it regardless.
 That's the point: it's for testing how your implementation handles things
 `run`'s fixed scenario doesn't cover, including things that shouldn't be
 valid.
+
+`send --write-timeout-secs <N>` (default 30) bounds transmission of each file.
+A write timeout closes the connection and exits 2; subsequent files are not sent.
+`--response-timeout-secs` separately bounds the wait for a reply after sending.
 
 `send` has no pass/fail verdict of its own (exit `0` once every `--file`
 has been sent, `2` on a harness-level failure) -- read the printed replies

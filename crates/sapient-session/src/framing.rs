@@ -171,6 +171,10 @@ pub(crate) struct FrameWriter {
 }
 
 impl FrameWriter {
+    pub(crate) fn is_pending(&self) -> bool {
+        !self.bytes.is_empty()
+    }
+
     /// Queue a frame synchronously, before the first cancellable write.
     pub(crate) fn queue(&mut self, payload: &[u8]) -> io::Result<()> {
         let length = encoded_length(payload.len())?;

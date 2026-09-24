@@ -7,10 +7,9 @@ use sapient_conformance_core::finding::{Finding, Severity};
 use serde::Serialize;
 
 use crate::cli::Role;
-use crate::completion::{CheckStatus, ScenarioCheck, ScenarioResult};
+use crate::completion::{CheckStatus, OperationalError, ScenarioCheck, ScenarioResult};
 
-/// Final verdict for a scenario that returned a report. Operational I/O failures
-/// still follow the CLI's separate exit-2 path and are not represented here.
+/// Conformance/coverage verdict. Operational failures are reported separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunOutcome {
@@ -18,7 +17,7 @@ pub enum RunOutcome {
     Passed,
     /// At least one error finding exists, even if checks are also incomplete.
     Failed,
-    /// No error findings exist, but at least one required check did not complete.
+    /// No error findings exist, but execution failed or a required check did not complete.
     Incomplete,
 }
 
@@ -43,11 +42,15 @@ pub struct RunReport {
     pub findings: Vec<Finding>,
     /// Progress and termination observations, retained for diagnosis.
     pub notes: Vec<String>,
+    /// Execution failure, if any; forces exit 2 and prevents PASS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operational_error: Option<OperationalError>,
 }
 
 impl RunReport {
     /// Finalize a scenario: error findings yield Failed, otherwise unfinished
-    /// checks yield Incomplete, otherwise Passed. Notes never affect the verdict.
+    /// checks or operational errors yield Incomplete, otherwise Passed.
+    /// Notes never affect the verdict.
     pub fn new(
         role: Role,
         suite: String,
@@ -57,7 +60,7 @@ impl RunReport {
     ) -> Self {
         let outcome = if findings.iter().any(|f| f.severity == Severity::Error) {
             RunOutcome::Failed
-        } else if !scenario.is_complete() {
+        } else if scenario.operational_error.is_some() || !scenario.is_complete() {
             RunOutcome::Incomplete
         } else {
             RunOutcome::Passed
@@ -72,13 +75,16 @@ impl RunReport {
             outcome,
             checks: scenario.checks,
             notes: scenario.notes,
+            operational_error: scenario.operational_error,
         }
     }
 
     /// Return 0 only for a passing report; failed and incomplete reports return 1.
-    /// The command handles operational errors separately with exit 2.
+    /// Operational errors take precedence and return 2, retaining conformance findings.
     pub fn exit_code(&self) -> ExitCode {
-        if self.passed {
+        if self.operational_error.is_some() {
+            ExitCode::from(2)
+        } else if self.passed {
             ExitCode::SUCCESS
         } else {
             ExitCode::FAILURE
@@ -95,7 +101,7 @@ impl RunReport {
         if self.passed {
             println!("PASS -- required scenario checks completed; no conformance errors.");
         } else if self.outcome == RunOutcome::Incomplete {
-            println!("INCOMPLETE -- required scenario checks did not finish.");
+            println!("INCOMPLETE -- execution stopped or required scenario checks did not finish.");
         } else {
             let error_count = self
                 .findings
@@ -103,6 +109,13 @@ impl RunReport {
                 .filter(|f| f.severity == Severity::Error)
                 .count();
             println!("FAIL -- {error_count} finding(s).");
+        }
+
+        if let Some(error) = &self.operational_error {
+            println!(
+                "Execution stopped during {} ({}) -- {}",
+                error.stage, error.kind, error.message
+            );
         }
 
         for severity in [Severity::Error, Severity::Warning] {
