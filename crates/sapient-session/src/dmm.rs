@@ -13,7 +13,7 @@ use std::io;
 
 use tokio::io::{AsyncRead, AsyncWrite, split};
 
-use crate::framing::{read_frame, write_frame};
+use crate::framing::{FrameReader, FrameWriter};
 use crate::state::{DmmEvent, DmmSession, SessionState};
 use sapient_conformance_core::{bsi_flex_335_v2_0::Task, finding::Finding};
 
@@ -24,6 +24,12 @@ pub struct DmmConnection<R, W> {
     session: DmmSession,
     reader: R,
     writer: W,
+    /// Retained across cancelled polls and interleaved proactive sends.
+    frame_reader: FrameReader,
+    /// Outbound bytes retained until fully written, including automatic replies.
+    frame_writer: FrameWriter,
+    /// An inbound frame was processed, but its poll has not yet returned.
+    pending_poll: bool,
 }
 
 impl<R, W> DmmConnection<R, W>
@@ -36,6 +42,9 @@ where
             session: DmmSession::new(harness_node_id),
             reader,
             writer,
+            frame_reader: FrameReader::default(),
+            frame_writer: FrameWriter::default(),
+            pending_poll: false,
         }
     }
 
@@ -62,18 +71,32 @@ where
     /// Issue a `Task` to the ASM (harness-initiated, not a reply to
     /// inbound traffic) -- see [`DmmSession::issue_task`].
     pub async fn issue_task(&mut self, task: &Task) -> io::Result<()> {
+        self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.issue_task(task);
-        write_frame(&mut self.writer, &bytes).await
+        self.frame_writer.queue(&bytes);
+        self.frame_writer.drain(&mut self.writer).await
     }
 
     /// Read and process exactly one inbound frame, auto-replying if the
     /// protocol requires it (`RegistrationAck`, `AlertAck`, or `Error`).
     /// Returns `Ok(false)` on a clean disconnect.
+    /// Cancellation retains partial reads and replies. The next poll finishes
+    /// any reply and returns this frame's progress before reading another frame.
+    /// Proactive sends also finish pending writes first. Discard the connection
+    /// after an I/O error; retrying a cancelled proactive call sends a new message.
     pub async fn poll_once(&mut self) -> io::Result<bool> {
-        match read_frame(&mut self.reader).await? {
+        self.frame_writer.drain(&mut self.writer).await?;
+        if self.pending_poll {
+            self.pending_poll = false;
+            return Ok(true);
+        }
+        match self.frame_reader.read(&mut self.reader).await? {
             Some(raw) => {
                 if let Some(reply) = self.session.on_bytes(&raw) {
-                    write_frame(&mut self.writer, &reply).await?;
+                    self.frame_writer.queue(&reply);
+                    self.pending_poll = true;
+                    self.frame_writer.drain(&mut self.writer).await?;
+                    self.pending_poll = false;
                 }
                 Ok(true)
             }

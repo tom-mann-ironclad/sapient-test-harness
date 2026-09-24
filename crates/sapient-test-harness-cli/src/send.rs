@@ -33,7 +33,7 @@ use sapient_conformance_core::{
     fixture_json::{decode_sapient_message_json, sapient_message_descriptor},
     validation::sapient_message::validate_sapient_message,
 };
-use sapient_session::framing::{read_frame, write_frame};
+use sapient_session::framing::{FrameReader, write_frame};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
@@ -65,9 +65,12 @@ pub enum ReplyOutcome {
 /// sends it over `stream` regardless of the validation outcome, and waits
 /// up to `response_timeout` for one reply frame. Only a real I/O failure
 /// (not an invalid outgoing message, not an undecodable or absent reply)
-/// returns `Err`.
+/// returns `Err`. Retain `reader` for the lifetime of this stream so a timeout
+/// can resume a partial reply on the next call. Replies are observed in wire
+/// order; a late reply is not necessarily a response to the latest sent file.
 pub async fn send_message<S>(
     stream: &mut S,
+    reader: &mut FrameReader,
     message: &SapientMessage,
     response_timeout: Duration,
 ) -> io::Result<SendOutcome>
@@ -78,7 +81,7 @@ where
 
     write_frame(stream, &message.encode_to_vec()).await?;
 
-    let reply = match timeout(response_timeout, read_frame(stream)).await {
+    let reply = match timeout(response_timeout, reader.read(stream)).await {
         Ok(Ok(Some(raw))) => match SapientMessage::decode(raw.as_slice()) {
             Ok(reply) => ReplyOutcome::Reply(Box::new(reply)),
             Err(err) => ReplyOutcome::UndecodableReply {
@@ -110,6 +113,7 @@ pub async fn send(args: SendArgs) -> ExitCode {
         }
     };
 
+    let mut reader = FrameReader::default();
     let message_descriptor = sapient_message_descriptor();
 
     for path in &args.files {
@@ -123,7 +127,8 @@ pub async fn send(args: SendArgs) -> ExitCode {
             }
         };
 
-        let outcome = match send_message(&mut stream, &message, response_timeout).await {
+        let outcome = match send_message(&mut stream, &mut reader, &message, response_timeout).await
+        {
             Ok(outcome) => outcome,
             Err(err) => {
                 eprintln!("error: {err}");

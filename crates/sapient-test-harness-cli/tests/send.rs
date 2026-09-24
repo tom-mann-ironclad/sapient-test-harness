@@ -6,6 +6,7 @@
 //! this workspace (`dmm_asm_interop.rs`), rather than spawning real
 //! subprocesses and scraping stdout.
 
+use sapient_session::framing::FrameReader;
 use std::time::Duration;
 
 use prost_types::Timestamp;
@@ -91,9 +92,21 @@ async fn sends_non_conformant_messages_from_both_sides_and_warns_without_blockin
     let dmm_message = invalid_task_from_dmm();
     let asm_message = invalid_alert_from_asm();
 
+    let mut dmm_reader = FrameReader::default();
+    let mut asm_reader = FrameReader::default();
     let (dmm_result, asm_result) = tokio::join!(
-        send_message(&mut dmm_side, &dmm_message, RESPONSE_TIMEOUT),
-        send_message(&mut asm_side, &asm_message, RESPONSE_TIMEOUT),
+        send_message(
+            &mut dmm_side,
+            &mut dmm_reader,
+            &dmm_message,
+            RESPONSE_TIMEOUT
+        ),
+        send_message(
+            &mut asm_side,
+            &mut asm_reader,
+            &asm_message,
+            RESPONSE_TIMEOUT
+        ),
     );
 
     let dmm_outcome = dmm_result.expect("send over an in-memory duplex should not I/O-error");
@@ -146,9 +159,15 @@ async fn sending_a_conformant_message_produces_no_warning() {
     // use a short timeout so the test doesn't hang waiting on it.
     let (mut a, _b) = tokio::io::duplex(16 * 1024);
 
-    let outcome = send_message(&mut a, &valid_registration_ack(), Duration::from_millis(50))
-        .await
-        .expect("send over an in-memory duplex should not I/O-error");
+    let mut reader = FrameReader::default();
+    let outcome = send_message(
+        &mut a,
+        &mut reader,
+        &valid_registration_ack(),
+        Duration::from_millis(50),
+    )
+    .await
+    .expect("send over an in-memory duplex should not I/O-error");
 
     assert!(outcome.validation.passed);
     assert!(outcome.validation.findings.is_empty());
@@ -158,9 +177,15 @@ async fn sending_a_conformant_message_produces_no_warning() {
 async fn no_reply_within_the_timeout_is_reported_not_an_error() {
     let (mut a, _b) = tokio::io::duplex(16 * 1024);
 
-    let outcome = send_message(&mut a, &valid_registration_ack(), Duration::from_millis(50))
-        .await
-        .expect("send over an in-memory duplex should not I/O-error");
+    let mut reader = FrameReader::default();
+    let outcome = send_message(
+        &mut a,
+        &mut reader,
+        &valid_registration_ack(),
+        Duration::from_millis(50),
+    )
+    .await
+    .expect("send over an in-memory duplex should not I/O-error");
 
     assert!(matches!(outcome.reply, ReplyOutcome::TimedOut));
 }
@@ -174,11 +199,54 @@ async fn peer_disconnecting_before_replying_is_reported_not_an_error() {
     let (mut a, b) = tokio::io::duplex(16 * 1024);
     let message = valid_registration_ack();
 
-    let (result, _) = tokio::join!(send_message(&mut a, &message, RESPONSE_TIMEOUT), async {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        drop(b);
-    },);
+    let mut reader = FrameReader::default();
+    let (result, _) = tokio::join!(
+        send_message(&mut a, &mut reader, &message, RESPONSE_TIMEOUT),
+        async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            drop(b);
+        },
+    );
     let outcome = result.expect("send over an in-memory duplex should not I/O-error");
 
     assert!(matches!(outcome.reply, ReplyOutcome::Disconnected));
+}
+
+#[tokio::test]
+async fn successive_sends_resume_partial_late_replies() {
+    use prost::Message;
+    use sapient_session::framing::{read_frame, write_frame};
+    use tokio::io::AsyncWriteExt;
+
+    let expected = valid_registration_ack();
+    let raw = expected.encode_to_vec();
+    let mut wire = (raw.len() as u32).to_le_bytes().to_vec();
+    wire.extend_from_slice(&raw);
+    for split in [2, 6] {
+        let (mut stream, mut peer) = tokio::io::duplex(16384);
+        let mut reader = FrameReader::default();
+        peer.write_all(&wire[..split]).await.unwrap();
+        let first = send_message(
+            &mut stream,
+            &mut reader,
+            &expected,
+            Duration::from_millis(10),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(first.reply, ReplyOutcome::TimedOut));
+        assert_eq!(read_frame(&mut peer).await.unwrap(), Some(raw.clone()));
+        peer.write_all(&wire[split..]).await.unwrap();
+        write_frame(&mut peer, &raw).await.unwrap();
+        for _ in 0..2 {
+            let next = send_message(&mut stream, &mut reader, &expected, RESPONSE_TIMEOUT)
+                .await
+                .unwrap();
+            match next.reply {
+                ReplyOutcome::Reply(reply) => assert_eq!(*reply, expected),
+                other => panic!("expected intact late reply, got {other:?}"),
+            }
+            assert_eq!(read_frame(&mut peer).await.unwrap(), Some(raw.clone()));
+        }
+    }
 }

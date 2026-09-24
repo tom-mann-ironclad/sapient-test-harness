@@ -13,21 +13,99 @@ use std::io;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-/// Reads one length-prefixed frame's payload. Returns `Ok(None)` on a
-/// clean disconnect (EOF exactly at a frame boundary); any other I/O
-/// error (including a partial frame, i.e. EOF mid-read) propagates.
+/// Incremental frame decoder. Keep one instance per stream across timeouts.
+/// Cancelling `read` preserves every consumed byte; retry on the same stream.
+#[derive(Default)]
+pub struct FrameReader {
+    /// Header bytes and the number already consumed.
+    header: [u8; 4],
+    header_read: usize,
+    /// Allocated only after the complete header arrives.
+    payload: Vec<u8>,
+    payload_read: usize,
+}
+
+impl FrameReader {
+    /// Read one payload, or `None` for EOF exactly between frames.
+    /// EOF inside a header or payload is `UnexpectedEof`. After an I/O error,
+    /// discard the connection rather than trying to recover framing.
+    pub async fn read<S: AsyncRead + Unpin>(
+        &mut self,
+        stream: &mut S,
+    ) -> io::Result<Option<Vec<u8>>> {
+        while self.header_read < 4 {
+            let n = stream.read(&mut self.header[self.header_read..]).await?;
+            if n == 0 {
+                return if self.header_read == 0 {
+                    Ok(None)
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated frame header",
+                    ))
+                };
+            }
+            self.header_read += n;
+        }
+        let length = u32::from_le_bytes(self.header) as usize;
+        self.payload.resize(length, 0);
+        while self.payload_read < length {
+            let n = stream.read(&mut self.payload[self.payload_read..]).await?;
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "truncated frame payload",
+                ));
+            }
+            self.payload_read += n;
+        }
+        self.header_read = 0;
+        self.payload_read = 0;
+        Ok(Some(std::mem::take(&mut self.payload)))
+    }
+}
+
+/// Reads one frame without retaining cancellation state. Use [`FrameReader`]
+/// if the read may be cancelled and the stream subsequently reused.
 pub async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Option<Vec<u8>>> {
-    let mut length_buf = [0_u8; 4];
-    match stream.read_exact(&mut length_buf).await {
-        Ok(_) => {}
-        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(err) => return Err(err),
+    FrameReader::default().read(stream).await
+}
+
+/// One pending outbound frame, with progress retained across cancellation.
+/// Drivers drain this before queuing any later frame to preserve wire order.
+#[derive(Default)]
+pub(crate) struct FrameWriter {
+    /// Complete wire frame (header followed by payload).
+    bytes: Vec<u8>,
+    /// Prefix already accepted by the underlying writer.
+    written: usize,
+}
+
+impl FrameWriter {
+    /// Queue a frame synchronously, before the first cancellable write.
+    pub(crate) fn queue(&mut self, payload: &[u8]) {
+        assert!(self.bytes.is_empty(), "pending frame must be drained first");
+        self.bytes
+            .extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        self.bytes.extend_from_slice(payload);
     }
 
-    let length = u32::from_le_bytes(length_buf) as usize;
-    let mut payload = vec![0_u8; length];
-    stream.read_exact(&mut payload).await?;
-    Ok(Some(payload))
+    /// Finish the pending frame without losing the offset if cancelled.
+    pub(crate) async fn drain<S: AsyncWrite + Unpin>(&mut self, stream: &mut S) -> io::Result<()> {
+        while self.written < self.bytes.len() {
+            let n = stream.write(&self.bytes[self.written..]).await?;
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "could not write frame",
+                ));
+            }
+            self.written += n;
+        }
+        self.bytes.clear();
+        self.written = 0;
+        Ok(())
+    }
 }
 
 pub async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, payload: &[u8]) -> io::Result<()> {

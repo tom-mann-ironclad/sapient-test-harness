@@ -17,7 +17,7 @@ use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::asm_state::{AsmEvent, AsmSession, AsmSessionState};
-use crate::framing::{read_frame, write_frame};
+use crate::framing::{FrameReader, FrameWriter};
 use sapient_conformance_core::{
     bsi_flex_335_v2_0::{Alert, DetectionReport, Registration, StatusReport},
     finding::Finding,
@@ -30,6 +30,12 @@ pub struct AsmConnection<R, W> {
     session: AsmSession,
     reader: R,
     writer: W,
+    /// Retained across cancelled polls and interleaved proactive sends.
+    frame_reader: FrameReader,
+    /// Outbound bytes retained until fully written, including automatic replies.
+    frame_writer: FrameWriter,
+    /// An inbound frame was processed, but its poll has not yet returned.
+    pending_poll: bool,
 }
 
 impl<R, W> AsmConnection<R, W>
@@ -42,6 +48,9 @@ where
             session: AsmSession::new(harness_node_id),
             reader,
             writer,
+            frame_reader: FrameReader::default(),
+            frame_writer: FrameWriter::default(),
+            pending_poll: false,
         }
     }
 
@@ -68,26 +77,34 @@ where
     /// Send our `Registration` to the DMM. Must happen before anything
     /// else -- see [`AsmSession::register`].
     pub async fn register(&mut self, registration: Registration) -> io::Result<()> {
+        self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.register(registration);
-        write_frame(&mut self.writer, &bytes).await
+        self.frame_writer.queue(&bytes);
+        self.frame_writer.drain(&mut self.writer).await
     }
 
     pub async fn issue_status_report(&mut self, status_report: StatusReport) -> io::Result<()> {
+        self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.issue_status_report(status_report);
-        write_frame(&mut self.writer, &bytes).await
+        self.frame_writer.queue(&bytes);
+        self.frame_writer.drain(&mut self.writer).await
     }
 
     pub async fn issue_detection_report(
         &mut self,
         detection_report: DetectionReport,
     ) -> io::Result<()> {
+        self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.issue_detection_report(detection_report);
-        write_frame(&mut self.writer, &bytes).await
+        self.frame_writer.queue(&bytes);
+        self.frame_writer.drain(&mut self.writer).await
     }
 
     pub async fn issue_alert(&mut self, alert: Alert) -> io::Result<()> {
+        self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.issue_alert(alert);
-        write_frame(&mut self.writer, &bytes).await
+        self.frame_writer.queue(&bytes);
+        self.frame_writer.drain(&mut self.writer).await
     }
 
     /// Read and process exactly one inbound frame, auto-replying if the
@@ -95,11 +112,23 @@ where
     /// Returns `Ok(false)` on a clean disconnect, so a caller can loop
     /// `while connection.poll_once().await? {}` to drain everything the
     /// peer sends until it closes the connection.
+    /// Cancellation retains partial reads and replies. The next poll finishes
+    /// any reply and returns this frame's progress before reading another frame.
+    /// Proactive sends also finish pending writes first. Discard the connection
+    /// after an I/O error; retrying a cancelled proactive call sends a new message.
     pub async fn poll_once(&mut self) -> io::Result<bool> {
-        match read_frame(&mut self.reader).await? {
+        self.frame_writer.drain(&mut self.writer).await?;
+        if self.pending_poll {
+            self.pending_poll = false;
+            return Ok(true);
+        }
+        match self.frame_reader.read(&mut self.reader).await? {
             Some(raw) => {
                 if let Some(reply) = self.session.on_bytes(&raw) {
-                    write_frame(&mut self.writer, &reply).await?;
+                    self.frame_writer.queue(&reply);
+                    self.pending_poll = true;
+                    self.frame_writer.drain(&mut self.writer).await?;
+                    self.pending_poll = false;
                 }
                 Ok(true)
             }
