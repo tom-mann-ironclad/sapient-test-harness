@@ -166,3 +166,89 @@ async fn invalid_envelopes_are_reported_while_the_whole_exchange_continues() {
         assert_eq!(findings.iter().filter(|f| f["rule_id"] == rule).count(), 2);
     }
 }
+
+#[tokio::test]
+async fn large_frame_warning_is_immediate_and_kept_out_of_json() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &listener.local_addr().unwrap().to_string(),
+                "--max-runtime-secs",
+                "2",
+                "--max-frame-bytes",
+                "1048576",
+                "--format",
+                "json",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        receive(&mut peer).await;
+        peer.write_u32_le(1048576).await.unwrap();
+        // No payload arrives: the warning must be visible while still receiving.
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        let warning = timeout(Duration::from_secs(1), async {
+            loop {
+                let line = stderr
+                    .next_line()
+                    .await
+                    .unwrap()
+                    .expect("warning before exit");
+                if line.contains("WARNING:") {
+                    break line;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(warning.contains("1048576 payload bytes"));
+        let output = child.wait_with_output().await.unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["outcome"], "incomplete");
+        assert_eq!(report["findings"].as_array().unwrap().len(), 0);
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn configured_receive_limit_stops_at_the_header_with_a_resource_diagnostic() {
+    timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &listener.local_addr().unwrap().to_string(),
+                "--max-frame-bytes",
+                "32",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        receive(&mut peer).await;
+        peer.write_u32_le(33).await.unwrap();
+        let output = child.wait_with_output().await.unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("configured receive limit of 32 bytes"));
+        assert!(stderr.contains("not a conformance finding"));
+    })
+    .await
+    .unwrap();
+}

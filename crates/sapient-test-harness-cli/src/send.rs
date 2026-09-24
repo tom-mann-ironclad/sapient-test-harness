@@ -82,13 +82,19 @@ where
     write_frame(stream, &message.encode_to_vec()).await?;
 
     let reply = match timeout(response_timeout, reader.read(stream)).await {
-        Ok(Ok(Some(raw))) => match SapientMessage::decode(raw.as_slice()) {
-            Ok(reply) => ReplyOutcome::Reply(Box::new(reply)),
-            Err(err) => ReplyOutcome::UndecodableReply {
-                raw,
-                error: err.to_string(),
-            },
-        },
+        Ok(Ok(Some(raw))) => {
+            let decoded = SapientMessage::decode(raw.as_slice());
+            match decoded {
+                Ok(reply) => {
+                    reader.recycle(raw);
+                    ReplyOutcome::Reply(Box::new(reply))
+                }
+                Err(err) => ReplyOutcome::UndecodableReply {
+                    raw,
+                    error: err.to_string(),
+                },
+            }
+        }
         Ok(Ok(None)) => ReplyOutcome::Disconnected,
         Ok(Err(err)) => return Err(err),
         Err(_elapsed) => ReplyOutcome::TimedOut,
@@ -113,7 +119,8 @@ pub async fn send(args: SendArgs) -> ExitCode {
         }
     };
 
-    let mut reader = FrameReader::default();
+    let mut reader = FrameReader::new(args.max_frame_bytes)
+        .with_large_message_warning(crate::cli::warn_large_message);
     let message_descriptor = sapient_message_descriptor();
 
     for path in &args.files {
@@ -136,6 +143,9 @@ pub async fn send(args: SendArgs) -> ExitCode {
             }
         };
         print_outcome(&outcome, response_timeout);
+        if let ReplyOutcome::UndecodableReply { raw, .. } = outcome.reply {
+            reader.recycle(raw);
+        }
     }
 
     println!("\nDone.");

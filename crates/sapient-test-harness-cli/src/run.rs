@@ -8,6 +8,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use sapient_conformance_core::finding::Finding;
+use sapient_session::framing::FrameReader;
 use sapient_session::{asm::AsmConnection, dmm::DmmConnection};
 use tokio::io::split;
 use tokio::net::{TcpListener, TcpStream};
@@ -36,8 +37,26 @@ pub async fn run(args: RunArgs) -> ExitCode {
     let max_runtime = Duration::from_secs(args.max_runtime_secs);
 
     let outcome = match args.role {
-        Role::Dmm => run_as_dmm(&harness_node_id, args.target, connect_timeout, max_runtime).await,
-        Role::Asm => run_as_asm(&harness_node_id, args.target, connect_timeout, max_runtime).await,
+        Role::Dmm => {
+            run_as_dmm(
+                &harness_node_id,
+                args.target,
+                connect_timeout,
+                max_runtime,
+                args.max_frame_bytes,
+            )
+            .await
+        }
+        Role::Asm => {
+            run_as_asm(
+                &harness_node_id,
+                args.target,
+                connect_timeout,
+                max_runtime,
+                args.max_frame_bytes,
+            )
+            .await
+        }
     };
 
     let (findings, scenario) = match outcome {
@@ -68,6 +87,7 @@ async fn run_as_dmm(
     target: SocketAddr,
     connect_timeout: Duration,
     max_runtime: Duration,
+    max_frame_bytes: u32,
 ) -> io::Result<(Vec<Finding>, ScenarioResult)> {
     let listener = TcpListener::bind(target).await?;
     eprintln!("Listening on {target} for an ASM to connect...");
@@ -83,7 +103,13 @@ async fn run_as_dmm(
     eprintln!("ASM connected from {peer_addr}.");
 
     let (reader, writer) = split(stream);
-    let mut connection = DmmConnection::new(harness_node_id, reader, writer);
+    let mut connection = DmmConnection::with_frame_reader(
+        harness_node_id,
+        reader,
+        writer,
+        FrameReader::new(max_frame_bytes)
+            .with_large_message_warning(crate::cli::warn_large_message),
+    );
     let deadline = Instant::now() + max_runtime;
     let scenario = run_dmm_scenario(&mut connection, deadline).await?;
     Ok((connection.take_findings(), scenario))
@@ -94,6 +120,7 @@ async fn run_as_asm(
     target: SocketAddr,
     connect_timeout: Duration,
     max_runtime: Duration,
+    max_frame_bytes: u32,
 ) -> io::Result<(Vec<Finding>, ScenarioResult)> {
     eprintln!("Connecting to {target}...");
     let stream = timeout(connect_timeout, TcpStream::connect(target))
@@ -107,7 +134,13 @@ async fn run_as_asm(
     eprintln!("Connected.");
 
     let (reader, writer) = split(stream);
-    let mut connection = AsmConnection::new(harness_node_id, reader, writer);
+    let mut connection = AsmConnection::with_frame_reader(
+        harness_node_id,
+        reader,
+        writer,
+        FrameReader::new(max_frame_bytes)
+            .with_large_message_warning(crate::cli::warn_large_message),
+    );
     let deadline = Instant::now() + max_runtime;
     let scenario = run_asm_scenario(&mut connection, deadline).await?;
     Ok((connection.take_findings(), scenario))

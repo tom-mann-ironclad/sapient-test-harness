@@ -51,6 +51,10 @@ pub struct SendArgs {
     #[arg(long)]
     pub target: SocketAddr,
 
+    /// Maximum incoming payload bytes (local resource limit, not a conformance rule).
+    #[arg(long, default_value_t = sapient_session::framing::DEFAULT_MAX_FRAME_BYTES)]
+    pub max_frame_bytes: u32,
+
     /// A message to send, as a path to a canonical-protobuf-JSON
     /// `SapientMessage` file (the same format used by
     /// `sapient-conformance-core/tests/fixtures/`) -- node_id, timestamp,
@@ -89,6 +93,10 @@ pub struct RunArgs {
     /// address to connect to.
     #[arg(long)]
     pub target: SocketAddr,
+
+    /// Maximum incoming payload bytes (local resource limit, not a conformance rule).
+    #[arg(long, default_value_t = sapient_session::framing::DEFAULT_MAX_FRAME_BYTES)]
+    pub max_frame_bytes: u32,
 
     /// Conformance suite to run. Only "v2.0" exists today -- the
     /// scenario/scripting DSL for adding more without recompiling is
@@ -140,4 +148,11 @@ pub enum OutputFormat {
     #[default]
     Text,
     Json,
+}
+
+/// Announce unusually large incoming frames immediately, before payload reception.
+pub(crate) fn warn_large_message(bytes: u32) {
+    eprintln!(
+        "WARNING: receiving a large message ({bytes} payload bytes); decoding and replies may require additional memory."
+    );
 }

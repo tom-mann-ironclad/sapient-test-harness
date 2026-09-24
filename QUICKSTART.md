@@ -83,6 +83,20 @@ pass/fail report. Useful flags:
 - `--node-id <uuid>` -- override the random node ID the harness stamps on
   its own outgoing messages.
 
+Incoming payloads are limited to **64 MiB** by default in both `run` and `send`.
+Use `--max-frame-bytes <bytes>` to change this local resource limit; for example,
+`--max-frame-bytes 2147483648` permits payloads up to 2 GiB. The four-byte header
+is excluded. Exceeding the limit closes the connection and exits 2 with a resource
+error, not a SAPIENT conformance finding.
+
+The receiver reuses a 64 KiB buffer, grows it as bytes arrive, and releases larger
+allocations after processing each frame. Frames of **1 MiB or more** produce an
+immediate warning on stderr, once per frame, without affecting the verdict or
+JSON stdout. Decoding and protocol error replies can require additional copies;
+the receive limit is not a cap on total process memory. Very large payloads still
+need sufficient RAM. Releasing allocations does not guarantee an immediate drop
+in the operating system's reported memory usage.
+
 ## 4. Interpreting the result
 
 While the session runs, progress streams live to your terminal (registered,

@@ -44,11 +44,21 @@ where
     W: AsyncWrite + Unpin,
 {
     pub fn new(harness_node_id: impl Into<String>, reader: R, writer: W) -> Self {
+        Self::with_frame_reader(harness_node_id, reader, writer, FrameReader::default())
+    }
+
+    /// Construct a connection with a configured receive limit and notification hook.
+    pub fn with_frame_reader(
+        harness_node_id: impl Into<String>,
+        reader: R,
+        writer: W,
+        frame_reader: FrameReader,
+    ) -> Self {
         AsmConnection {
             session: AsmSession::new(harness_node_id),
             reader,
             writer,
-            frame_reader: FrameReader::default(),
+            frame_reader,
             frame_writer: FrameWriter::default(),
             pending_poll: false,
         }
@@ -79,14 +89,14 @@ where
     pub async fn register(&mut self, registration: Registration) -> io::Result<()> {
         self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.register(registration);
-        self.frame_writer.queue(&bytes);
+        self.frame_writer.queue(&bytes)?;
         self.frame_writer.drain(&mut self.writer).await
     }
 
     pub async fn issue_status_report(&mut self, status_report: StatusReport) -> io::Result<()> {
         self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.issue_status_report(status_report);
-        self.frame_writer.queue(&bytes);
+        self.frame_writer.queue(&bytes)?;
         self.frame_writer.drain(&mut self.writer).await
     }
 
@@ -96,14 +106,14 @@ where
     ) -> io::Result<()> {
         self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.issue_detection_report(detection_report);
-        self.frame_writer.queue(&bytes);
+        self.frame_writer.queue(&bytes)?;
         self.frame_writer.drain(&mut self.writer).await
     }
 
     pub async fn issue_alert(&mut self, alert: Alert) -> io::Result<()> {
         self.frame_writer.drain(&mut self.writer).await?;
         let bytes = self.session.issue_alert(alert);
-        self.frame_writer.queue(&bytes);
+        self.frame_writer.queue(&bytes)?;
         self.frame_writer.drain(&mut self.writer).await
     }
 
@@ -124,8 +134,10 @@ where
         }
         match self.frame_reader.read(&mut self.reader).await? {
             Some(raw) => {
-                if let Some(reply) = self.session.on_bytes(&raw) {
-                    self.frame_writer.queue(&reply);
+                let reply = self.session.on_bytes(&raw);
+                self.frame_reader.recycle(raw);
+                if let Some(reply) = reply {
+                    self.frame_writer.queue(&reply)?;
                     self.pending_poll = true;
                     self.frame_writer.drain(&mut self.writer).await?;
                     self.pending_poll = false;
