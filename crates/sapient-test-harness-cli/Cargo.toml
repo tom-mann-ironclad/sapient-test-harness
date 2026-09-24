@@ -31,3 +31,6 @@ serde_json.workspace = true
 uuid.workspace = true
 ulid.workspace = true
 include_dir.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

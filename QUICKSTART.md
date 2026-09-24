@@ -92,7 +92,14 @@ on `stdout`, looks like this on success:
 ```
 sapient-harness run -- role=asm suite=v2.0 target=127.0.0.1:5000
 
-PASS -- no conformance findings.
+PASS -- required scenario checks completed; no conformance errors.
+
+Scenario checks:
+  Registration: Completed
+  StatusReport: Completed
+  DetectionReport: Completed
+  AlertAck: Completed
+  Goodbye: Completed
 
 Notes:
   - Registration accepted.
@@ -117,10 +124,33 @@ the field it's about, and a human-readable explanation. `Warning`-severity
 findings (e.g. falling back to a legacy mode-declaration convention) don't
 fail the run; only `Error`-severity ones do.
 
-**Exit codes** (`run` and `selftest`): `0` pass, `1` conformance findings,
+A `run` can also report `INCOMPLETE`: the connection ended or the deadline
+expired before required checks finished. This is not a claim that the peer broke
+a protocol rule. It means the scenario did not obtain enough evidence to pass.
+The report lists every required check as `completed`, `incomplete`, or `skipped`
+(with a reason for skips). Error findings take precedence and produce `failed`,
+but incomplete checks remain visible.
+
+The bundled scenario requires:
+
+- **ASM role:** accepted registration, transmitted StatusReport and DetectionReport,
+  a valid correlated AlertAck, and a transmitted GoodBye. An unsolicited Task from
+  the DMM is optional and its absence does not fail the run.
+- **DMM role:** accepted registration, a validated ordinary StatusReport, and a
+  valid correlated TaskAck for the probe task. The task check is skipped when the
+  registration has no non-default mode for that probe. Spontaneous detections and
+  alerts are validated if received but are not required to complete this scenario.
+  GoodBye/disconnect is not required: the observation deadline can end a passing
+  run if all required checks have already completed. GoodBye or re-registration
+  does not substitute for an outstanding TaskAck.
+
+Completed sends and acknowledgements establish only the checks listed here, not
+that the peer implements every feature of the standard.
+
+**Exit codes** (`run` and `selftest`): `0` pass, `1` conformance findings or an incomplete `run`,
 `2` a harness-level failure (couldn't connect, bad arguments, etc.) --
-distinct from `1` so CI can tell "your implementation failed" from "the
-harness itself couldn't run."
+distinct from `1` so CI can distinguish a failed/incomplete scenario from an
+operational failure.
 
 ### JSON output
 
@@ -139,6 +169,14 @@ sapient-harness run --role asm --target your-c2-node-host:5000 \
   "suite": "v2.0",
   "target": "127.0.0.1:5000",
   "passed": true,
+  "outcome": "passed",
+  "checks": [
+    { "check": "registration", "status": "completed" },
+    { "check": "status_report", "status": "completed" },
+    { "check": "detection_report", "status": "completed" },
+    { "check": "alert_ack", "status": "completed" },
+    { "check": "goodbye", "status": "completed" }
+  ],
   "findings": [],
   "notes": [
     "Registration accepted.",
@@ -148,6 +186,9 @@ sapient-harness run --role asm --target your-c2-node-host:5000 \
   ]
 }
 ```
+
+`outcome` is `passed`, `failed`, or `incomplete`; `passed` is true only for
+`passed`. `checks` records scenario completion separately from `findings`.
 
 `findings` has the same `rule_id`/`field_path`/`severity`/`message` shape
 as the text report's findings, just structured -- handy for `jq`, e.g.

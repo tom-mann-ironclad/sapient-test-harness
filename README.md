@@ -32,6 +32,11 @@ This is a Cargo workspace:
   `sapient-conformance-core` for message validation and adds session-level
   sequencing, timing, and cross-message correlation a single-message
   validator can't check.
+  Both roles expose progress through `take_event()` (`DmmEvent` / `AsmEvent`).
+  Scenarios consume these events after each processed message to track completed
+  handshakes and correlated acknowledgements. Events describe the most recent
+  inbound message, are consumed at most once, and are replaced by the next frame;
+  they are not an event history. Findings remain available separately.
   `tests/dmm_asm_interop.rs` drives the harness's own `DmmConnection`
   against its own `AsmConnection` over a real `tokio::io::duplex`, as a
   genuine interoperability check independent of the hand-built fixtures
@@ -58,7 +63,7 @@ This is a Cargo workspace:
   tracking, so it isn't constrained by the harness's own session rules --
   a message that fails `validate_sapient_message` is sent anyway, with a
   printed warning, not blocked. `run` and `selftest` take `--format json`
-  for CI; exit code 0 (pass), 1 (conformance findings/fixture mismatches),
+  for CI; exit code 0 (pass), 1 (conformance findings/incomplete runs/fixture mismatches),
   or 2 (harness-level failure, e.g. couldn't connect).
 
 ## Parity with the legacy harness

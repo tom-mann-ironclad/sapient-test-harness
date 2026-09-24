@@ -32,6 +32,27 @@ use sapient_conformance_core::{
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
 
+/// Progress from the most recently processed message. These events let callers
+/// distinguish acknowledged work from state cleared by GoodBye/re-registration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DmmEvent {
+    /// A valid registration established or replaced the local contract.
+    /// The driver still has to transmit the returned RegistrationAck.
+    RegistrationAccepted,
+    /// A non-GoodBye report passed payload validation. Session-level findings
+    /// (such as a mode mismatch or late interval) may still accompany it.
+    StatusReportValidated,
+    /// A valid TaskAck matched an outstanding task, regardless of its status.
+    /// Receipt alone does not establish successful task execution.
+    TaskAcknowledged {
+        /// Correlation ID of the task that was acknowledged.
+        task_id: String,
+    },
+    /// A GoodBye caused the contract to be cleared; this is not a transport EOF
+    /// or a guarantee that the whole message passed validation.
+    GoodbyeReceived,
+}
+
 /// Where a [`DmmSession`] currently is in the protocol lifecycle.
 #[derive(Debug, Clone)]
 pub enum SessionState {
@@ -83,6 +104,9 @@ pub struct DmmSession {
     /// `Error.packet` without threading `raw` through every handler's
     /// signature.
     current_raw: Vec<u8>,
+    /// Single-message progress slot, reset before decoding each inbound frame.
+    /// Findings have separate retention; this slot is not an event queue.
+    event: Option<DmmEvent>,
 }
 
 impl DmmSession {
@@ -92,7 +116,15 @@ impl DmmSession {
             state: SessionState::AwaitingRegistration,
             findings: Vec::new(),
             current_raw: Vec::new(),
+            event: None,
         }
+    }
+
+    /// Consume progress from the most recent `on_bytes` call, at most once.
+    /// Every new frame replaces any unconsumed event, including on decode failure.
+    /// Call after each processed frame; absence of an event does not imply success.
+    pub fn take_event(&mut self) -> Option<DmmEvent> {
+        self.event.take()
     }
 
     pub fn state(&self) -> &SessionState {
@@ -113,6 +145,7 @@ impl DmmSession {
     /// Returns the raw bytes of a reply to send back, if the protocol
     /// requires one.
     pub fn on_bytes(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
+        self.event = None;
         self.current_raw = raw.to_vec();
 
         let message = match SapientMessage::decode(raw) {
@@ -283,6 +316,7 @@ impl DmmSession {
             outstanding_alert_ids: HashSet::new(),
         }));
 
+        self.event = Some(DmmEvent::RegistrationAccepted);
         Some(self.registration_ack_reply(true, vec![]))
     }
 
@@ -305,6 +339,7 @@ impl DmmSession {
         // the socket) that we don't want a minor validation failure
         // elsewhere in the message to suppress recognising it.
         if status_report.system == Some(System::Goodbye as i32) {
+            self.event = Some(DmmEvent::GoodbyeReceived);
             self.state = SessionState::AwaitingRegistration;
             return None;
         }
@@ -360,6 +395,7 @@ impl DmmSession {
         }
 
         contract.last_status_report_timestamp = peer_timestamp;
+        self.event = Some(DmmEvent::StatusReportValidated);
         None
     }
 
@@ -461,6 +497,8 @@ impl DmmSession {
                      this session issued that's still awaiting acknowledgement."
                 ),
             });
+        } else {
+            self.event = Some(DmmEvent::TaskAcknowledged { task_id });
         }
 
         None

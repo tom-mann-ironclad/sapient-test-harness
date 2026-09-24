@@ -27,6 +27,25 @@ use sapient_conformance_core::{
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
 
+/// Progress from the most recently processed inbound message, consumed with
+/// [`AsmSession::take_event`]. Invalid or uncorrelated AlertAcks do not emit progress.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AsmEvent {
+    /// The peer accepted registration and the local contract was established.
+    RegistrationAccepted,
+    /// The peer explicitly rejected the pending registration.
+    RegistrationRejected,
+    /// An invalid acknowledgement or unusable local contract prevented registration.
+    /// Details remain available in the session's findings.
+    RegistrationFailed,
+    /// A valid acknowledgement matched an outstanding alert. This records receipt,
+    /// not a claim that the acknowledgement's status was Accepted.
+    AlertAcknowledged {
+        /// Correlation ID of the outstanding alert acknowledged by the peer.
+        alert_id: String,
+    },
+}
+
 /// Where an [`AsmSession`] currently is in the protocol lifecycle.
 #[derive(Debug, Clone)]
 pub enum AsmSessionState {
@@ -66,6 +85,9 @@ pub struct AsmSession {
     state: AsmSessionState,
     findings: Vec<Finding>,
     current_raw: Vec<u8>,
+    /// Single-message progress slot, reset before decoding each inbound frame.
+    /// Findings have separate retention; this slot is not an event queue.
+    event: Option<AsmEvent>,
 }
 
 impl AsmSession {
@@ -76,7 +98,14 @@ impl AsmSession {
             state: AsmSessionState::NotRegistered,
             findings: Vec::new(),
             current_raw: Vec::new(),
+            event: None,
         }
+    }
+
+    /// Consume progress from the most recent `on_bytes` call. An event is returned
+    /// at most once, and each new inbound frame replaces any unconsumed event.
+    pub fn take_event(&mut self) -> Option<AsmEvent> {
+        self.event.take()
     }
 
     pub fn state(&self) -> &AsmSessionState {
@@ -122,6 +151,7 @@ impl AsmSession {
     /// requires one (`TaskAck`, or `Error` for a post-Registration
     /// decode/validation failure).
     pub fn on_bytes(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
+        self.event = None;
         self.current_raw = raw.to_vec();
 
         let message = match SapientMessage::decode(raw) {
@@ -220,6 +250,11 @@ impl AsmSession {
                     ack.ack_response_reason.join("; ")
                 ),
             });
+            self.event = Some(if ack.acceptance == Some(false) {
+                AsmEvent::RegistrationRejected
+            } else {
+                AsmEvent::RegistrationFailed
+            });
             self.state = AsmSessionState::NotRegistered;
             return None;
         }
@@ -273,6 +308,7 @@ impl AsmSession {
                               already accepted it), not something the peer did wrong."
                         .to_string(),
                 });
+                self.event = Some(AsmEvent::RegistrationFailed);
                 self.state = AsmSessionState::NotRegistered;
                 return None;
             }
@@ -288,6 +324,7 @@ impl AsmSession {
                          did wrong."
                     ),
                 });
+                self.event = Some(AsmEvent::RegistrationFailed);
                 self.state = AsmSessionState::NotRegistered;
                 return None;
             }
@@ -298,6 +335,7 @@ impl AsmSession {
             active_mode,
             outstanding_alert_ids: HashSet::new(),
         }));
+        self.event = Some(AsmEvent::RegistrationAccepted);
 
         None
     }
@@ -377,6 +415,8 @@ impl AsmSession {
                      Alert this session sent that's still awaiting acknowledgement."
                 ),
             });
+        } else {
+            self.event = Some(AsmEvent::AlertAcknowledged { alert_id });
         }
 
         None

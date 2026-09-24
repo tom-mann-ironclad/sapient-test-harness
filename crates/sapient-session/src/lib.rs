@@ -12,5 +12,5 @@ pub mod fixtures;
 pub mod framing;
 pub mod state;
 
-pub use asm_state::{AsmSession, AsmSessionState, RegisteredAsmContract};
-pub use state::{DmmSession, RegisteredContract, SessionState};
+pub use asm_state::{AsmEvent, AsmSession, AsmSessionState, RegisteredAsmContract};
+pub use state::{DmmEvent, DmmSession, RegisteredContract, SessionState};

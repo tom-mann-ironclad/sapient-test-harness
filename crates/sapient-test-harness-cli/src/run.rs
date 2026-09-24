@@ -14,6 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Instant, timeout};
 
 use crate::cli::{OutputFormat, Role, RunArgs};
+use crate::completion::ScenarioResult;
 use crate::report::RunReport;
 use crate::scenario::{run_asm_scenario, run_dmm_scenario};
 
@@ -39,7 +40,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
         Role::Asm => run_as_asm(&harness_node_id, args.target, connect_timeout, max_runtime).await,
     };
 
-    let (findings, notes) = match outcome {
+    let (findings, scenario) = match outcome {
         Ok(result) => result,
         Err(err) => {
             eprintln!("error: {err}");
@@ -52,18 +53,14 @@ pub async fn run(args: RunArgs) -> ExitCode {
         args.suite,
         args.target.to_string(),
         findings,
-        notes,
+        scenario,
     );
     match args.format {
         OutputFormat::Text => report.print_text(),
         OutputFormat::Json => report.print_json(),
     }
 
-    if report.passed {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
+    report.exit_code()
 }
 
 async fn run_as_dmm(
@@ -71,7 +68,7 @@ async fn run_as_dmm(
     target: SocketAddr,
     connect_timeout: Duration,
     max_runtime: Duration,
-) -> io::Result<(Vec<Finding>, Vec<String>)> {
+) -> io::Result<(Vec<Finding>, ScenarioResult)> {
     let listener = TcpListener::bind(target).await?;
     eprintln!("Listening on {target} for an ASM to connect...");
     let (stream, peer_addr) =
@@ -88,8 +85,8 @@ async fn run_as_dmm(
     let (reader, writer) = split(stream);
     let mut connection = DmmConnection::new(harness_node_id, reader, writer);
     let deadline = Instant::now() + max_runtime;
-    let notes = run_dmm_scenario(&mut connection, deadline).await?;
-    Ok((connection.take_findings(), notes))
+    let scenario = run_dmm_scenario(&mut connection, deadline).await?;
+    Ok((connection.take_findings(), scenario))
 }
 
 async fn run_as_asm(
@@ -97,7 +94,7 @@ async fn run_as_asm(
     target: SocketAddr,
     connect_timeout: Duration,
     max_runtime: Duration,
-) -> io::Result<(Vec<Finding>, Vec<String>)> {
+) -> io::Result<(Vec<Finding>, ScenarioResult)> {
     eprintln!("Connecting to {target}...");
     let stream = timeout(connect_timeout, TcpStream::connect(target))
         .await
@@ -112,6 +109,6 @@ async fn run_as_asm(
     let (reader, writer) = split(stream);
     let mut connection = AsmConnection::new(harness_node_id, reader, writer);
     let deadline = Instant::now() + max_runtime;
-    let notes = run_asm_scenario(&mut connection, deadline).await?;
-    Ok((connection.take_findings(), notes))
+    let scenario = run_asm_scenario(&mut connection, deadline).await?;
+    Ok((connection.take_findings(), scenario))
 }

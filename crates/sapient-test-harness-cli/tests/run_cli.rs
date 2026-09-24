@@ -1,0 +1,135 @@
+//! Verify the shipped command's stdout and process exit code, not just its report builder.
+use std::process::Stdio;
+use std::time::Duration;
+
+use prost::Message;
+use prost_types::Timestamp;
+use sapient_conformance_core::bsi_flex_335_v2_0::{
+    AlertAck, RegistrationAck, SapientMessage, sapient_message::Content,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    process::Command,
+    time::timeout,
+};
+
+async fn receive(stream: &mut TcpStream) -> Content {
+    let length = stream.read_u32_le().await.unwrap();
+    let mut raw = vec![0; length as usize];
+    stream.read_exact(&mut raw).await.unwrap();
+    SapientMessage::decode(raw.as_slice())
+        .unwrap()
+        .content
+        .unwrap()
+}
+
+async fn send(stream: &mut TcpStream, content: Content) {
+    let raw = SapientMessage {
+        timestamp: Some(Timestamp {
+            seconds: 1,
+            nanos: 0,
+        }),
+        node_id: Some("550e8400-e29b-41d4-a716-446655440000".into()),
+        content: Some(content),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    stream.write_u32_le(raw.len() as u32).await.unwrap();
+    stream.write_all(&raw).await.unwrap();
+}
+
+async fn run_case(complete: bool, format: &str) -> std::process::Output {
+    timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &listener.local_addr().unwrap().to_string(),
+                "--max-runtime-secs",
+                if complete { "5" } else { "1" },
+                "--format",
+                format,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(matches!(receive(&mut peer).await, Content::Registration(_)));
+        if complete {
+            send(
+                &mut peer,
+                Content::RegistrationAck(RegistrationAck {
+                    acceptance: Some(true),
+                    ack_response_reason: vec![],
+                }),
+            )
+            .await;
+            assert!(matches!(receive(&mut peer).await, Content::StatusReport(_)));
+            assert!(matches!(
+                receive(&mut peer).await,
+                Content::DetectionReport(_)
+            ));
+            let Content::Alert(alert) = receive(&mut peer).await else {
+                panic!("expected alert")
+            };
+            send(
+                &mut peer,
+                Content::AlertAck(AlertAck {
+                    alert_id: alert.alert_id,
+                    alert_ack_status: Some(1),
+                    reason: vec![],
+                }),
+            )
+            .await;
+            assert!(matches!(receive(&mut peer).await, Content::StatusReport(_)));
+        }
+        // Keep the connection open: the incomplete case must terminate on its deadline.
+        child.wait_with_output().await.unwrap()
+    })
+    .await
+    .expect("CLI must terminate within the test deadline")
+}
+
+#[tokio::test]
+async fn silent_peer_emits_incomplete_json_and_exits_one() {
+    let output = run_case(false, "json").await;
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["passed"], false);
+    assert_eq!(json["outcome"], "incomplete");
+    assert_eq!(json["checks"][0]["check"], "registration");
+    assert_eq!(json["checks"][0]["status"], "incomplete");
+    assert_eq!(json["findings"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn silent_peer_text_reports_incomplete_not_pass_or_zero_findings_failure() {
+    let output = run_case(false, "text").await;
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("INCOMPLETE --"));
+    assert!(!stdout.contains("PASS --"));
+    assert!(!stdout.contains("FAIL -- 0"));
+}
+
+#[tokio::test]
+async fn complete_exchange_emits_passed_json_and_exits_zero() {
+    let output = run_case(true, "json").await;
+    assert_eq!(output.status.code(), Some(0));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["passed"], true);
+    assert_eq!(json["outcome"], "passed");
+    assert!(
+        json["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["status"] == "completed")
+    );
+}

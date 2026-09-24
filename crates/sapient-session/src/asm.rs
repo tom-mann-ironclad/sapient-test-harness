@@ -16,7 +16,7 @@ use std::io;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::asm_state::{AsmSession, AsmSessionState};
+use crate::asm_state::{AsmEvent, AsmSession, AsmSessionState};
 use crate::framing::{read_frame, write_frame};
 use sapient_conformance_core::{
     bsi_flex_335_v2_0::{Alert, DetectionReport, Registration, StatusReport},
@@ -43,6 +43,14 @@ where
             reader,
             writer,
         }
+    }
+
+    /// Consume progress from the most recently processed inbound message.
+    /// Call after `poll_once` returns `Ok(true)`, before polling another frame.
+    /// Returns an event at most once; `None` is not a conformance verdict.
+    /// EOF and I/O errors are conveyed by `poll_once`, not by this event slot.
+    pub fn take_event(&mut self) -> Option<AsmEvent> {
+        self.session.take_event()
     }
 
     pub fn state(&self) -> &AsmSessionState {
