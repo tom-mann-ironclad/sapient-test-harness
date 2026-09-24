@@ -31,7 +31,10 @@ This is a Cargo workspace:
   callers that don't need to issue tasks mid-session. Builds on
   `sapient-conformance-core` for message validation and adds session-level
   sequencing, timing, and cross-message correlation a single-message
-  validator can't check.
+  validator can't check. Both roles record all common-envelope findings before
+  normal payload handling; decodable envelope violations do not short-circuit
+  the session. Completion events describe observed progress, not conformance.
+  Findings still make the final report fail even when all scenario steps complete.
   Both roles expose progress through `take_event()` (`DmmEvent` / `AsmEvent`).
   Scenarios consume these events after each processed message to track completed
   handshakes and correlated acknowledgements. Events describe the most recent

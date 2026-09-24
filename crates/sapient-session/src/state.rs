@@ -26,7 +26,8 @@ use sapient_conformance_core::{
     finding::{Finding, Severity},
     validation::{
         alert::validate_alert, detection_report::validate_detection_report,
-        registration::validate_registration, task_ack::validate_task_ack,
+        registration::validate_registration, sapient_message::validate_envelope,
+        task_ack::validate_task_ack,
     },
 };
 
@@ -36,7 +37,8 @@ use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode}
 /// distinguish acknowledged work from state cleared by GoodBye/re-registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DmmEvent {
-    /// A valid registration established or replaced the local contract.
+    /// A registration payload established or replaced the local contract.
+    /// Envelope diagnostics do not suppress this progress event.
     /// The driver still has to transmit the returned RegistrationAck.
     RegistrationAccepted,
     /// A non-GoodBye report passed payload validation. Session-level findings
@@ -180,6 +182,10 @@ impl DmmSession {
     }
 
     fn on_message(&mut self, message: SapientMessage) -> Option<SapientMessage> {
+        // Diagnostic by default: keep processing decoded content so this run can
+        // expose payload and sequencing issues too. Envelope findings affect the
+        // final verdict, not the existing reply/state-transition policy.
+        self.findings.extend(validate_envelope(&message).findings);
         let peer_node_id = message.node_id.clone();
         let peer_timestamp = message.timestamp;
         let content = message.content.clone();

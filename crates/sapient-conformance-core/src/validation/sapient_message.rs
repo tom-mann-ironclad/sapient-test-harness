@@ -13,59 +13,72 @@ use crate::validation::{
     task_ack::validate_task_ack,
 };
 
-pub fn validate_sapient_message(message: SapientMessage) -> ValidationOutcome {
-    let timestamp_validation = validate_timestamp(
-        message.timestamp,
-        "sapient_message.timestamp.missing",
-        "Timestamp must be specified in sapient message.",
-        "sapient_message.timestamp.malformed",
-        "Timestamp is malformed in sapient message.",
+/// Validate the common envelope without traversing the payload.
+///
+/// All independent envelope issues are collected in field order. Sessions use
+/// this borrowed check to record diagnostics, then continue their normal payload
+/// and sequencing logic rather than treating a malformed header as a stop signal.
+/// Content presence is checked separately by the message/session dispatcher.
+pub fn validate_envelope(message: &SapientMessage) -> ValidationOutcome {
+    let mut findings = Vec::new();
+    findings.extend(
+        validate_timestamp(
+            message.timestamp,
+            "sapient_message.timestamp.missing",
+            "Timestamp must be specified in sapient message.",
+            "sapient_message.timestamp.malformed",
+            "Timestamp is malformed in sapient message.",
+        )
+        .findings,
     );
-    if !timestamp_validation.passed {
-        return timestamp_validation;
-    }
-
-    let node_id_validation = validate_uuid_v4(
-        message.node_id.as_deref(),
-        "sapient_message.node_id.invalid",
-        "A valid UUID v4 must be used for a node ID in sapient message.",
+    findings.extend(
+        validate_uuid_v4(
+            message.node_id.as_deref(),
+            "sapient_message.node_id.invalid",
+            "A valid UUID v4 must be used for a node ID in sapient message.",
+        )
+        .findings,
     );
-    if !node_id_validation.passed {
-        return node_id_validation;
-    }
-
     if message.destination_id.is_some() {
-        let destination_id_validation = validate_uuid_v4(
-            message.destination_id.as_deref(),
-            "sapient_message.destination_id.invalid",
-            "A valid UUID v4 must be used for a destination ID in sapient message.",
+        findings.extend(
+            validate_uuid_v4(
+                message.destination_id.as_deref(),
+                "sapient_message.destination_id.invalid",
+                "A valid UUID v4 must be used for a destination ID in sapient message.",
+            )
+            .findings,
         );
-        if !destination_id_validation.passed {
-            return destination_id_validation;
-        }
     }
+    ValidationOutcome {
+        passed: findings.is_empty(),
+        findings,
+    }
+}
 
-    let content = match message.content {
-        Some(content) => content,
-        None => {
-            return ValidationOutcome::fail(
-                "sapient_message.content.missing",
-                "Content must be specified in sapient message.",
-            );
+/// Validate the envelope and payload independently so envelope errors do not
+/// hide payload diagnostics. Nested validators retain their own collection policy.
+pub fn validate_sapient_message(message: SapientMessage) -> ValidationOutcome {
+    let mut outcome = validate_envelope(&message);
+    let payload = match message.content {
+        Some(Content::Registration(registration)) => validate_registration(registration),
+        Some(Content::RegistrationAck(ack)) => validate_registration_ack(ack),
+        Some(Content::StatusReport(status_report)) => validate_status_report(status_report),
+        Some(Content::DetectionReport(detection_report)) => {
+            validate_detection_report(detection_report)
         }
+        Some(Content::Task(task)) => validate_task(task),
+        Some(Content::TaskAck(task_ack)) => validate_task_ack(task_ack),
+        Some(Content::Alert(alert)) => validate_alert(alert),
+        Some(Content::AlertAck(alert_ack)) => validate_alert_ack(alert_ack),
+        Some(Content::Error(error)) => validate_error(error),
+        None => ValidationOutcome::fail(
+            "sapient_message.content.missing",
+            "Content must be specified in sapient message.",
+        ),
     };
-
-    match content {
-        Content::Registration(registration) => validate_registration(registration),
-        Content::RegistrationAck(registration_ack) => validate_registration_ack(registration_ack),
-        Content::StatusReport(status_report) => validate_status_report(status_report),
-        Content::DetectionReport(detection_report) => validate_detection_report(detection_report),
-        Content::Task(task) => validate_task(task),
-        Content::TaskAck(task_ack) => validate_task_ack(task_ack),
-        Content::Alert(alert) => validate_alert(alert),
-        Content::AlertAck(alert_ack) => validate_alert_ack(alert_ack),
-        Content::Error(error) => validate_error(error),
-    }
+    outcome.passed &= payload.passed;
+    outcome.findings.extend(payload.findings);
+    outcome
 }
 
 #[cfg(test)]

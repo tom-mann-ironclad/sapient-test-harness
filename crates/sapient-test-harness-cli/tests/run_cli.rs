@@ -24,8 +24,8 @@ async fn receive(stream: &mut TcpStream) -> Content {
         .unwrap()
 }
 
-async fn send(stream: &mut TcpStream, content: Content) {
-    let raw = SapientMessage {
+async fn send(stream: &mut TcpStream, content: Content, invalid_envelope: bool) {
+    let mut message = SapientMessage {
         timestamp: Some(Timestamp {
             seconds: 1,
             nanos: 0,
@@ -33,13 +33,18 @@ async fn send(stream: &mut TcpStream, content: Content) {
         node_id: Some("550e8400-e29b-41d4-a716-446655440000".into()),
         content: Some(content),
         ..Default::default()
+    };
+    if invalid_envelope {
+        message.timestamp = None;
+        message.node_id = Some("bad-node".into());
+        message.destination_id = Some("bad-destination".into());
     }
-    .encode_to_vec();
+    let raw = message.encode_to_vec();
     stream.write_u32_le(raw.len() as u32).await.unwrap();
     stream.write_all(&raw).await.unwrap();
 }
 
-async fn run_case(complete: bool, format: &str) -> std::process::Output {
+async fn run_case(complete: bool, format: &str, invalid_envelope: bool) -> std::process::Output {
     timeout(Duration::from_secs(10), async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
@@ -68,6 +73,7 @@ async fn run_case(complete: bool, format: &str) -> std::process::Output {
                     acceptance: Some(true),
                     ack_response_reason: vec![],
                 }),
+                invalid_envelope,
             )
             .await;
             assert!(matches!(receive(&mut peer).await, Content::StatusReport(_)));
@@ -85,6 +91,7 @@ async fn run_case(complete: bool, format: &str) -> std::process::Output {
                     alert_ack_status: Some(1),
                     reason: vec![],
                 }),
+                invalid_envelope,
             )
             .await;
             assert!(matches!(receive(&mut peer).await, Content::StatusReport(_)));
@@ -98,7 +105,7 @@ async fn run_case(complete: bool, format: &str) -> std::process::Output {
 
 #[tokio::test]
 async fn silent_peer_emits_incomplete_json_and_exits_one() {
-    let output = run_case(false, "json").await;
+    let output = run_case(false, "json", false).await;
     assert_eq!(output.status.code(), Some(1));
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["passed"], false);
@@ -110,7 +117,7 @@ async fn silent_peer_emits_incomplete_json_and_exits_one() {
 
 #[tokio::test]
 async fn silent_peer_text_reports_incomplete_not_pass_or_zero_findings_failure() {
-    let output = run_case(false, "text").await;
+    let output = run_case(false, "text", false).await;
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("INCOMPLETE --"));
@@ -120,7 +127,7 @@ async fn silent_peer_text_reports_incomplete_not_pass_or_zero_findings_failure()
 
 #[tokio::test]
 async fn complete_exchange_emits_passed_json_and_exits_zero() {
-    let output = run_case(true, "json").await;
+    let output = run_case(true, "json", false).await;
     assert_eq!(output.status.code(), Some(0));
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["passed"], true);
@@ -132,4 +139,30 @@ async fn complete_exchange_emits_passed_json_and_exits_zero() {
             .iter()
             .all(|c| c["status"] == "completed")
     );
+}
+
+#[tokio::test]
+async fn invalid_envelopes_are_reported_while_the_whole_exchange_continues() {
+    let output = run_case(true, "json", true).await;
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["outcome"], "failed");
+    assert_eq!(json["passed"], false);
+    assert!(
+        json["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["status"] == "completed")
+    );
+    let findings = json["findings"].as_array().unwrap();
+    // All three defects in both RegistrationAck and the later AlertAck survive.
+    assert_eq!(findings.len(), 6);
+    for rule in [
+        "sapient_message.timestamp.missing",
+        "sapient_message.node_id.invalid",
+        "sapient_message.destination_id.invalid",
+    ] {
+        assert_eq!(findings.iter().filter(|f| f["rule_id"] == rule).count(), 2);
+    }
 }

@@ -21,14 +21,16 @@ use sapient_conformance_core::{
     finding::{Finding, Severity},
     validation::{
         alert_ack::validate_alert_ack, registration_ack::validate_registration_ack,
-        task::validate_task,
+        sapient_message::validate_envelope, task::validate_task,
     },
 };
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
 
 /// Progress from the most recently processed inbound message, consumed with
-/// [`AsmSession::take_event`]. Invalid or uncorrelated AlertAcks do not emit progress.
+/// [`AsmSession::take_event`]. Invalid or uncorrelated AlertAck payloads do not
+/// emit progress. Envelope diagnostics are recorded separately and do not suppress
+/// payload processing or progress events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AsmEvent {
     /// The peer accepted registration and the local contract was established.
@@ -183,6 +185,10 @@ impl AsmSession {
     }
 
     fn on_message(&mut self, message: SapientMessage) -> Option<SapientMessage> {
+        // Diagnostic by default: keep processing decoded content so this run can
+        // expose payload and sequencing issues too. Envelope findings affect the
+        // final verdict, not the existing reply/state-transition policy.
+        self.findings.extend(validate_envelope(&message).findings);
         if self.peer_node_id.is_none() {
             self.peer_node_id = message.node_id.clone();
         }

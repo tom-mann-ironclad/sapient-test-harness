@@ -13,11 +13,10 @@
 //! per-instance addressing is a reasonable follow-up once something
 //! (the CLI, a report renderer) actually needs it.
 //!
-//! This pass preserves the short-circuit-on-first-failure behaviour every
-//! `validate_*` function already had: `findings` holds at most one entry
-//! for now (empty on pass, one on fail). The type is already shaped to
-//! hold more, for when a later pass accumulates every problem in a
-//! message rather than stopping at the first one.
+//! Envelope validation collects independent field errors, and whole-message
+//! validation retains both envelope and payload findings. Most nested payload
+//! validators still return their first failure; the collection policy belongs
+//! to each validator rather than this result type.
 
 /// How serious a [`Finding`] is. Every check in this crate today is a hard
 /// ICD conformance rule, so only [`Severity::Error`] is currently
