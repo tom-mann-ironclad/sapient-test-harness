@@ -9,7 +9,8 @@
 //! without a socket. The async driver (`dmm.rs`) owns the actual framing
 //! and TCP.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use prost::Message;
 use prost_types::Timestamp;
@@ -22,6 +23,7 @@ use sapient_conformance_core::{
         sapient_message::Content,
         status_report::System,
         task::{Command as TaskCommand, command::Command as TaskCommandKind},
+        task_ack::TaskStatus,
     },
     finding::{Finding, Severity},
     validation::{
@@ -44,7 +46,8 @@ pub enum DmmEvent {
     /// A non-GoodBye report passed payload validation. Session-level findings
     /// (such as a mode mismatch or late interval) may still accompany it.
     StatusReportValidated,
-    /// A valid TaskAck matched an outstanding task, regardless of its status.
+    /// A valid TaskAck advanced a tracked task's lifecycle. Repeated or invalid
+    /// transitions do not emit progress.
     /// Receipt alone does not establish successful task execution.
     TaskAcknowledged {
         /// Correlation ID of the task that was acknowledged.
@@ -68,6 +71,44 @@ pub enum SessionState {
     Registered(Box<RegisteredContract>),
 }
 
+/// Lifecycle evidence for an outstanding task. Acceptance is non-terminal;
+/// Completed, Failed, or Rejected removes the task from tracking.
+#[derive(Debug, Clone)]
+pub struct TrackedTask {
+    /// Last valid acknowledgement; None means issued but not acknowledged.
+    pub status: Option<TaskStatus>,
+    /// Requested mode, kept separate from the active mode until acknowledged.
+    pub requested_mode: Option<ModeDefinition>,
+}
+
+/// Accepted mode transition. Previous-mode traffic is allowed through settling
+/// using peer timestamps, so reports already in flight are not false failures.
+#[derive(Debug, Clone)]
+pub struct ModeTransition {
+    /// Task responsible for this transition; later tasks must not be rolled back.
+    pub task_id: String,
+    /// Mode in effect before this acknowledgement changed the active contract.
+    pub previous_mode: ModeDefinition,
+    /// Peer time at acceptance (or direct completion).
+    pub acknowledged_at: Option<Timestamp>,
+    /// Permitted previous-mode window measured from acknowledgement; completion
+    /// can shorten this window to the elapsed time at completion.
+    pub settle_time: Duration,
+}
+
+impl ModeTransition {
+    fn permits_previous(&self, timestamp: Option<Timestamp>) -> bool {
+        match (self.acknowledged_at, timestamp) {
+            (Some(start), Some(now)) => {
+                timestamp_elapsed(&start, &now).is_some_and(|elapsed| elapsed <= self.settle_time)
+            }
+            // Missing timestamps already have envelope findings. Do not invent
+            // a timing-based contract failure when the timing is unknowable.
+            _ => true,
+        }
+    }
+}
+
 /// The declared contract for an active session, captured from the most
 /// recently accepted `Registration`.
 #[derive(Debug, Clone)]
@@ -75,15 +116,18 @@ pub struct RegisteredContract {
     pub node_id: String,
     pub registration: Registration,
     /// The `ModeDefinition` currently in effect. Starts as the
-    /// `MODE_TYPE_DEFAULT` mode and changes on a `mode_change` `Task`.
+    /// `MODE_TYPE_DEFAULT` mode and changes only on an accepted/completed mode task.
     pub active_mode: ModeDefinition,
+    /// Most recent accepted mode change and its previous-mode grace window.
+    pub mode_transition: Option<ModeTransition>,
     /// The peer-declared timestamp of the most recent `StatusReport`,
     /// used for the retroactive interval check -- not wall-clock receipt
     /// time, so this is deterministic and testable without real delays.
     pub last_status_report_timestamp: Option<Timestamp>,
-    /// `task_id`s issued by this session that haven't yet been
-    /// acknowledged by a matching `TaskAck`.
+    /// IDs still awaiting a terminal result, including accepted tasks.
     pub outstanding_task_ids: HashSet<String>,
+    /// Outstanding tasks, keyed by correlation ID and removed on terminal acknowledgement.
+    pub tasks: HashMap<String, TrackedTask>,
     /// `alert_id`s this session has acknowledged are tracked implicitly
     /// (an `AlertAck` is sent synchronously in reply to every valid
     /// `Alert`); this set exists for symmetry and future use, e.g. if
@@ -198,10 +242,10 @@ impl DmmSession {
                 self.handle_status_report(peer_timestamp, status_report)
             }
             Some(Content::DetectionReport(detection_report)) => {
-                self.handle_detection_report(detection_report)
+                self.handle_detection_report(peer_timestamp, detection_report)
             }
             Some(Content::Alert(alert)) => self.handle_alert(alert),
-            Some(Content::TaskAck(task_ack)) => self.handle_task_ack(task_ack),
+            Some(Content::TaskAck(task_ack)) => self.handle_task_ack(peer_timestamp, task_ack),
             Some(Content::Error(error)) => self.handle_incoming_error(error),
             Some(other) => self.handle_wrong_role_message(other),
             None => {
@@ -317,8 +361,10 @@ impl DmmSession {
             node_id,
             registration,
             active_mode,
+            mode_transition: None,
             last_status_report_timestamp: None,
             outstanding_task_ids: HashSet::new(),
+            tasks: HashMap::new(),
             outstanding_alert_ids: HashSet::new(),
         }));
 
@@ -361,6 +407,10 @@ impl DmmSession {
         // understanding of the contract.
         if let Some(reported_mode) = &status_report.mode
             && contract.active_mode.mode_name.as_deref() != Some(reported_mode.as_str())
+            && !contract.mode_transition.as_ref().is_some_and(|transition| {
+                transition.permits_previous(peer_timestamp)
+                    && transition.previous_mode.mode_name.as_deref() == Some(reported_mode.as_str())
+            })
         {
             self.findings.push(Finding {
                 rule_id: "session.status_report.mode_mismatch".to_string(),
@@ -406,6 +456,7 @@ impl DmmSession {
 
     fn handle_detection_report(
         &mut self,
+        peer_timestamp: Option<Timestamp>,
         detection_report: DetectionReport,
     ) -> Option<SapientMessage> {
         let contract = match &self.state {
@@ -425,10 +476,14 @@ impl DmmSession {
         // , full structural matching is deferred): a reported
         // classification type should be one the active mode actually
         // declared somewhere in its detection class definitions.
-        let declared_types: HashSet<&str> = contract
-            .active_mode
-            .detection_definition
-            .iter()
+        let previous_mode = contract
+            .mode_transition
+            .as_ref()
+            .filter(|transition| transition.permits_previous(peer_timestamp))
+            .map(|transition| &transition.previous_mode);
+        let declared_types: HashSet<&str> = std::iter::once(&contract.active_mode)
+            .chain(previous_mode)
+            .flat_map(|mode| &mode.detection_definition)
             .flat_map(|definition| definition.detection_class_definition.iter())
             .flat_map(|class_definition| class_definition.class_definition.iter())
             .filter_map(|class| class.r#type.as_deref())
@@ -477,7 +532,11 @@ impl DmmSession {
         Some(self.alert_ack_reply(alert_id))
     }
 
-    fn handle_task_ack(&mut self, task_ack: TaskAck) -> Option<SapientMessage> {
+    fn handle_task_ack(
+        &mut self,
+        peer_timestamp: Option<Timestamp>,
+        task_ack: TaskAck,
+    ) -> Option<SapientMessage> {
         let contract = match &mut self.state {
             SessionState::AwaitingRegistration => {
                 return self.sequencing_violation("TaskAck");
@@ -492,18 +551,99 @@ impl DmmSession {
         }
 
         let task_id = task_ack.task_id.clone().unwrap_or_default();
-        if !contract.outstanding_task_ids.remove(&task_id) {
+        let status = TaskStatus::try_from(task_ack.task_status.unwrap_or_default())
+            .expect("validated TaskAck status");
+        let Some(task) = contract.tasks.get_mut(&task_id) else {
             self.findings.push(Finding {
-                rule_id: "session.task_ack.correlation_mismatch".to_string(),
-                field_path: "task_ack.task_id".to_string(),
+                rule_id: "session.task_ack.correlation_mismatch".into(),
+                field_path: "task_ack.task_id".into(),
                 severity: Severity::Error,
+                message: format!("No outstanding task matches TaskAck task_id {task_id:?}."),
+            });
+            return None;
+        };
+        if task.status == Some(status) {
+            self.findings.push(Finding {
+                rule_id: "session.task_ack.duplicate".into(),
+                field_path: "task_ack.task_status".into(),
+                severity: Severity::Warning,
                 message: format!(
-                    "TaskAck references task_id {task_id:?}, which doesn't match any Task \
-                     this session issued that's still awaiting acknowledgement."
+                    "Repeated {status:?} acknowledgement for task {task_id:?}; state unchanged."
                 ),
             });
-        } else {
-            self.event = Some(DmmEvent::TaskAcknowledged { task_id });
+            return None;
+        }
+        let allowed = match task.status {
+            None => matches!(
+                status,
+                TaskStatus::Accepted | TaskStatus::Rejected | TaskStatus::Completed
+            ),
+            Some(TaskStatus::Accepted) => {
+                matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+            }
+            _ => false,
+        };
+        if !allowed {
+            self.findings.push(Finding {
+                rule_id: "session.task_ack.invalid_transition".into(),
+                field_path: "task_ack.task_status".into(), severity: Severity::Error,
+                message: format!("Task {task_id:?} cannot transition from {:?} to {status:?} under the harness lifecycle policy.", task.status),
+            });
+            return None;
+        }
+        if let Some(mode) = &task.requested_mode {
+            match status {
+                TaskStatus::Accepted | TaskStatus::Completed if task.status.is_none() => {
+                    let previous_mode = std::mem::replace(&mut contract.active_mode, mode.clone());
+                    contract.mode_transition = Some(ModeTransition {
+                        task_id: task_id.clone(),
+                        previous_mode,
+                        acknowledged_at: peer_timestamp,
+                        settle_time: if status == TaskStatus::Completed {
+                            Duration::ZERO
+                        } else {
+                            mode.settle_time
+                                .as_ref()
+                                .and_then(protocol_duration)
+                                .unwrap_or(Duration::ZERO)
+                        },
+                    });
+                }
+                TaskStatus::Completed => {
+                    if let Some(transition) = &mut contract.mode_transition
+                        && transition.task_id == task_id
+                    {
+                        if let (Some(start), Some(completed)) =
+                            (transition.acknowledged_at, peer_timestamp)
+                        {
+                            if let Some(elapsed) = timestamp_elapsed(&start, &completed) {
+                                transition.settle_time = transition.settle_time.min(elapsed);
+                            }
+                        } else {
+                            transition.acknowledged_at = peer_timestamp;
+                            transition.settle_time = Duration::ZERO;
+                        }
+                    }
+                }
+                TaskStatus::Failed
+                    if contract
+                        .mode_transition
+                        .as_ref()
+                        .is_some_and(|transition| transition.task_id == task_id) =>
+                {
+                    let transition = contract.mode_transition.take().expect("matched transition");
+                    contract.active_mode = transition.previous_mode;
+                }
+                _ => {}
+            }
+        }
+        task.status = Some(status);
+        self.event = Some(DmmEvent::TaskAcknowledged {
+            task_id: task_id.clone(),
+        });
+        if status != TaskStatus::Accepted {
+            contract.outstanding_task_ids.remove(&task_id);
+            contract.tasks.remove(&task_id);
         }
 
         None
@@ -552,14 +692,11 @@ impl DmmSession {
 
     /// Issue a `Task` to the ASM (harness-initiated, not a reply to
     /// inbound traffic). Tracks the `task_id` as outstanding until a
-    /// matching `TaskAck` arrives, and if the command is a mode change,
-    /// updates the tracked active mode.
+    /// terminal `TaskAck` arrives. A mode request is stored separately and only
+    /// activates on Accepted/Completed; merely sending it does not change modes.
     pub fn issue_task(&mut self, task: &Task) -> Vec<u8> {
         if let SessionState::Registered(contract) = &mut self.state {
-            if let Some(task_id) = &task.task_id {
-                contract.outstanding_task_ids.insert(task_id.clone());
-            }
-
+            let mut requested_mode = None;
             if let Some(TaskCommand {
                 command: Some(TaskCommandKind::ModeChange(target_mode_name)),
                 ..
@@ -571,7 +708,7 @@ impl DmmSession {
                     .iter()
                     .find(|mode| mode.mode_name.as_deref() == Some(target_mode_name.as_str()))
                 {
-                    Some(mode) => contract.active_mode = mode.clone(),
+                    Some(mode) => requested_mode = Some(mode.clone()),
                     None => {
                         self.findings.push(Finding {
                             rule_id: "session.task.mode_change_unknown_mode".to_string(),
@@ -584,6 +721,22 @@ impl DmmSession {
                             ),
                         });
                     }
+                }
+            }
+            if let Some(task_id) = &task.task_id {
+                if contract.tasks.contains_key(task_id) {
+                    self.findings.push(Finding { rule_id: "session.task.duplicate_id".into(),
+                        field_path: "task.task_id".into(), severity: Severity::Error,
+                        message: format!("Issued an already tracked task ID {task_id:?}; existing lifecycle retained.") });
+                } else {
+                    contract.outstanding_task_ids.insert(task_id.clone());
+                    contract.tasks.insert(
+                        task_id.clone(),
+                        TrackedTask {
+                            status: None,
+                            requested_mode,
+                        },
+                    );
                 }
             }
         } else {
@@ -667,6 +820,30 @@ fn now_timestamp() -> Timestamp {
     }
 }
 
+/// Compare peer timestamps without converting epoch-sized values to floating
+/// point. Earlier/in-flight reports have zero elapsed time, matching the grace
+/// window policy. Malformed nanoseconds cannot establish a duration.
+fn timestamp_elapsed(earlier: &Timestamp, later: &Timestamp) -> Option<Duration> {
+    if !(0..1_000_000_000).contains(&earlier.nanos) || !(0..1_000_000_000).contains(&later.nanos) {
+        return None;
+    }
+    let seconds = i128::from(later.seconds) - i128::from(earlier.seconds);
+    let nanos =
+        (seconds * 1_000_000_000 + i128::from(later.nanos) - i128::from(earlier.nanos)).max(0);
+    Some(Duration::new(
+        u64::try_from(nanos / 1_000_000_000).ok()?,
+        (nanos % 1_000_000_000) as u32,
+    ))
+}
+
+/// Convert the wire format's floating-point quantity and units at the boundary.
+/// Invalid, negative, or unrepresentable quantities do not panic or enter state.
+fn protocol_duration(
+    value: &sapient_conformance_core::bsi_flex_335_v2_0::registration::Duration,
+) -> Option<Duration> {
+    Duration::try_from_secs_f64(duration_to_seconds(value)?).ok()
+}
+
 fn timestamp_diff_seconds(earlier: &Timestamp, later: &Timestamp) -> Option<f64> {
     let earlier_nanos = earlier.seconds as f64 * 1e9 + earlier.nanos as f64;
     let later_nanos = later.seconds as f64 * 1e9 + later.nanos as f64;
@@ -696,4 +873,45 @@ fn duration_to_seconds(
         TimeUnits::Days => 86400.0,
     };
     Some(value * multiplier)
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+    use sapient_conformance_core::bsi_flex_335_v2_0::registration::TimeUnits;
+
+    #[test]
+    fn elapsed_preserves_subsecond_precision_at_modern_epoch_times() {
+        let start = Timestamp {
+            seconds: 1_790_000_000,
+            nanos: 999_999_999,
+        };
+        let end = Timestamp {
+            seconds: start.seconds + 1,
+            nanos: 0,
+        };
+        assert_eq!(
+            timestamp_elapsed(&start, &end),
+            Some(Duration::from_nanos(1))
+        );
+        assert_eq!(timestamp_elapsed(&end, &start), Some(Duration::ZERO));
+        assert_eq!(
+            timestamp_elapsed(&start, &Timestamp { nanos: -1, ..end }),
+            None
+        );
+    }
+
+    #[test]
+    fn wire_duration_converts_units_and_rejects_invalid_values() {
+        assert_eq!(
+            protocol_duration(&crate::fixtures::duration(TimeUnits::Milliseconds, 125.0)),
+            Some(Duration::from_millis(125))
+        );
+        for value in [f32::NAN, f32::INFINITY, -1.0, f32::MAX] {
+            assert_eq!(
+                protocol_duration(&crate::fixtures::duration(TimeUnits::Seconds, value)),
+                None
+            );
+        }
+    }
 }

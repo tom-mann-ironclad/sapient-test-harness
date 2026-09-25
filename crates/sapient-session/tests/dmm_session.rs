@@ -372,7 +372,7 @@ fn re_registration_fully_replaces_the_contract() {
 }
 
 #[test]
-fn mode_change_task_updates_active_mode() {
+fn accepted_mode_change_task_updates_active_mode() {
     let mut session = DmmSession::new(HARNESS_NODE_ID);
     register(&mut session);
 
@@ -390,6 +390,16 @@ fn mode_change_task_updates_active_mode() {
         }),
     });
 
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        1,
+        Content::TaskAck(TaskAck {
+            task_id: Some("01H1VV3VN40RV97CDFSXJB44KA".into()),
+            task_status: Some(TaskStatus::Accepted as i32),
+            ..Default::default()
+        }),
+    )));
     // No StatusReport claiming ALTERNATE_MODE should now be a mismatch.
     session.on_bytes(&encode(status_report_at(1, ALTERNATE_MODE)));
     assert!(
