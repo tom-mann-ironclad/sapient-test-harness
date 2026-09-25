@@ -331,3 +331,32 @@ fn goodbye_envelope_is_checked_even_though_goodbye_clears_the_contract() {
     assert_eq!(dmm.take_event(), Some(DmmEvent::GoodbyeReceived));
     assert!(matches!(dmm.state(), SessionState::AwaitingRegistration));
 }
+
+#[test]
+fn malformed_goodbye_payload_records_findings_and_still_ends_session() {
+    use sapient_conformance_core::bsi_flex_335_v2_0::StatusReport;
+    for (field, rule) in [
+        ("report_id", "status_report.report_id.invalid"),
+        ("info", "status_report.info.invalid"),
+        ("mode", "status_report.mode.missing"),
+    ] {
+        let mut dmm = registered_dmm();
+        let mut goodbye = StatusReport {
+            report_id: Some(ID.into()),
+            system: Some(5),
+            info: Some(1),
+            mode: Some("Default".into()),
+            ..Default::default()
+        };
+        match field {
+            "report_id" => goodbye.report_id = None,
+            "info" => goodbye.info = None,
+            _ => goodbye.mode = None,
+        }
+        let message = envelope(ASM, DMM, 2, Content::StatusReport(goodbye));
+        assert!(dmm.on_bytes(&encode(message)).is_none());
+        assert_eq!(rules(dmm.findings()), vec![rule]);
+        assert_eq!(dmm.take_event(), Some(DmmEvent::GoodbyeReceived));
+        assert!(matches!(dmm.state(), SessionState::AwaitingRegistration));
+    }
+}

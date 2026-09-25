@@ -8,7 +8,7 @@
 //! duplications already eliminated once (see `framing.rs`'s module docs).
 
 use sapient_conformance_core::bsi_flex_335_v2_0::{
-    Registration,
+    RangeBearing, RangeBearingCoordinateSystem, RangeBearingDatum, Registration,
     registration::{
         Capability, ClassDefinition, ConfigurationData, DetectionClassDefinition,
         DetectionDefinition, Duration, LocationType, ModeDefinition, ModeType, NodeDefinition,
@@ -22,10 +22,29 @@ pub const ALTERNATE_MODE: &str = "Alternate";
 pub const DECLARED_CLASSIFICATION_TYPE: &str = "Human";
 pub const STATUS_INTERVAL_SECONDS: f32 = 5.0;
 
+/// Coordinate units shared by the default registration and its detection payload.
+pub const DETECTION_COORDINATES: RangeBearingCoordinateSystem =
+    RangeBearingCoordinateSystem::DegreesM;
+/// North reference shared by the default registration and detection payload.
+pub const DETECTION_DATUM: RangeBearingDatum = RangeBearingDatum::True;
+
+/// A detection position consistent with both bundled modes' declared format.
+pub fn detection_position() -> RangeBearing {
+    RangeBearing {
+        azimuth: Some(2.0),
+        range: Some(100.0),
+        coordinate_system: Some(DETECTION_COORDINATES as i32),
+        datum: Some(DETECTION_DATUM as i32),
+        ..Default::default()
+    }
+}
+
 pub fn valid_location_type() -> LocationType {
     LocationType {
-        coordinates_oneof: Some(CoordinatesOneof::RangeBearingUnits(1)),
-        datum_oneof: Some(DatumOneof::RangeBearingDatum(1)),
+        coordinates_oneof: Some(CoordinatesOneof::RangeBearingUnits(
+            DETECTION_COORDINATES as i32,
+        )),
+        datum_oneof: Some(DatumOneof::RangeBearingDatum(DETECTION_DATUM as i32)),
         zone: None,
     }
 }

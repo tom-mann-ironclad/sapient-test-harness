@@ -318,6 +318,8 @@ async fn dmm_case(case: u8) -> RunReport {
                 Content::StatusReport(StatusReport {
                     report_id: Some(ID.into()),
                     system: Some(5),
+                    info: Some(1),
+                    mode: Some("Default".into()),
                     ..Default::default()
                 }),
             )
@@ -657,5 +659,168 @@ fn operational_failure_prevents_pass_even_after_all_checks_complete() {
     assert_eq!(
         serde_json::to_value(report).unwrap()["operational_error"]["kind"],
         "ConnectionReset"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn delayed_fragmented_ack_keeps_status_cadence_and_current_mode() {
+    use sapient_conformance_core::{
+        bsi_flex_335_v2_0::{
+            Task,
+            detection_report::LocationOneof,
+            registration::location_type::{CoordinatesOneof, DatumOneof},
+            task::{Command, command::Command as TaskCommand},
+        },
+        validation::sapient_message::validate_sapient_message,
+    };
+    async fn validated(peer: &mut DuplexStream) -> Content {
+        let len = peer.read_u32_le().await.unwrap();
+        let mut bytes = vec![0; len as usize];
+        peer.read_exact(&mut bytes).await.unwrap();
+        let message = SapientMessage::decode(bytes.as_slice()).unwrap();
+        let outcome = validate_sapient_message(message.clone());
+        assert!(outcome.passed, "{:?}", outcome.findings);
+        message.content.unwrap()
+    }
+    let (stream, mut peer) = duplex(65536);
+    let (r, w) = split(stream);
+    let mut asm = AsmConnection::new(NODE, r, w);
+    let start = Instant::now();
+    let target = async {
+        let Content::Registration(registration) = validated(&mut peer).await else {
+            panic!("registration");
+        };
+        send(
+            &mut peer,
+            Content::RegistrationAck(RegistrationAck {
+                acceptance: Some(true),
+                ack_response_reason: vec![],
+            }),
+        )
+        .await;
+        let Content::StatusReport(initial) = validated(&mut peer).await else {
+            panic!("status");
+        };
+        assert_eq!(initial.mode.as_deref(), Some("Default"));
+        let Content::DetectionReport(detection) = validated(&mut peer).await else {
+            panic!("detection");
+        };
+        let Some(LocationOneof::RangeBearing(position)) = detection.location_oneof else {
+            panic!("range/bearing detection");
+        };
+        for mode in &registration.mode_definition {
+            let declared = mode.detection_definition[0].location_type.as_ref().unwrap();
+            assert_eq!(
+                declared.coordinates_oneof,
+                position
+                    .coordinate_system
+                    .map(CoordinatesOneof::RangeBearingUnits)
+            );
+            assert_eq!(
+                declared.datum_oneof,
+                position.datum.map(DatumOneof::RangeBearingDatum)
+            );
+        }
+        let Content::Alert(alert) = validated(&mut peer).await else {
+            panic!("alert");
+        };
+        send(
+            &mut peer,
+            Content::Task(Task {
+                task_id: Some(ID.into()),
+                control: Some(1),
+                command: Some(Command {
+                    command: Some(TaskCommand::ModeChange("Alternate".into())),
+                    command_parameter: None,
+                }),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert!(matches!(validated(&mut peer).await, Content::TaskAck(_)));
+        // Leave the AlertAck header incomplete across two status deadlines.
+        let ack = SapientMessage {
+            timestamp: Some(Timestamp {
+                seconds: 10,
+                nanos: 0,
+            }),
+            node_id: Some(NODE.into()),
+            content: Some(Content::AlertAck(AlertAck {
+                alert_id: alert.alert_id,
+                alert_ack_status: Some(1),
+                reason: vec![],
+            })),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let header = (ack.len() as u32).to_le_bytes();
+        peer.write_all(&header[..2]).await.unwrap();
+        let mut last_id = initial.report_id;
+        for seconds in [5, 10] {
+            let Content::StatusReport(status) = validated(&mut peer).await else {
+                panic!("periodic status");
+            };
+            assert_eq!(Instant::now() - start, Duration::from_secs(seconds));
+            assert_eq!(status.system, Some(1));
+            assert_eq!(status.mode.as_deref(), Some("Alternate"));
+            assert_ne!(status.report_id, last_id);
+            last_id = status.report_id;
+        }
+        peer.write_all(&header[2..]).await.unwrap();
+        peer.write_all(&ack).await.unwrap();
+        let Content::StatusReport(goodbye) = validated(&mut peer).await else {
+            panic!("goodbye");
+        };
+        assert_eq!(goodbye.system, Some(5));
+        assert_eq!(goodbye.mode.as_deref(), Some("Alternate"));
+        assert_ne!(goodbye.report_id, last_id);
+    };
+    let (result, ()) = tokio::join!(
+        run_asm_scenario(&mut asm, start + Duration::from_secs(20)),
+        target
+    );
+    verdict(
+        &report(Role::Asm, result, asm.take_findings()),
+        RunOutcome::Passed,
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn periodic_status_backpressure_obeys_the_run_deadline() {
+    let (r, mut inbound) = duplex(65536);
+    let (w, mut outbound) = duplex(1);
+    let mut asm = AsmConnection::new(NODE, r, w);
+    let start = Instant::now();
+    let target = async {
+        receive(&mut outbound).await;
+        send(
+            &mut inbound,
+            Content::RegistrationAck(RegistrationAck {
+                acceptance: Some(true),
+                ack_response_reason: vec![],
+            }),
+        )
+        .await;
+        for _ in 0..3 {
+            receive(&mut outbound).await;
+        } // status, detection, alert
+        // Neither read periodic reports nor acknowledge the alert.
+        sleep(Duration::from_secs(10)).await;
+    };
+    let (result, ()) = tokio::join!(
+        async {
+            let result = run_asm_scenario(&mut asm, start + Duration::from_secs(8)).await;
+            assert_eq!(Instant::now() - start, Duration::from_secs(8));
+            result
+        },
+        target
+    );
+    let report = report(Role::Asm, result, asm.take_findings());
+    check(&report, Check::StatusReport, CheckStatus::Completed);
+    check(&report, Check::Goodbye, CheckStatus::Incomplete);
+    assert_eq!(report.exit_code(), ExitCode::from(2));
+    assert_eq!(
+        report.operational_error.unwrap().stage,
+        "send_periodic_status"
     );
 }

@@ -338,13 +338,12 @@ impl DmmSession {
             SessionState::Registered(contract) => contract,
         };
 
-        // GoodBye: return to AwaitingRegistration. Checked before running
-        // full validation -- a GoodBye is meaningful even if other fields
-        // in the same report are malformed, and it's rare enough in
-        // practice (in practice nobody sends them, they just close
-        // the socket) that we don't want a minor validation failure
-        // elsewhere in the message to suppress recognising it.
+        // Teardown remains meaningful even for a malformed payload. Record its
+        // validation findings before clearing the contract; do not suppress the
+        // GoodBye event or attempt an Error reply after the session has ended.
         if status_report.system == Some(System::Goodbye as i32) {
+            self.findings
+                .extend(validate_status_report_outcome(status_report).findings);
             self.event = Some(DmmEvent::GoodbyeReceived);
             self.state = SessionState::AwaitingRegistration;
             return None;

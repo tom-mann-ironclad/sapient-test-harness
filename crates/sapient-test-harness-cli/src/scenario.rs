@@ -27,7 +27,7 @@ use crate::completion::{Check, ScenarioResult};
 
 use crate::cli::Role;
 use sapient_conformance_core::bsi_flex_335_v2_0::{
-    Alert, DetectionReport, Location, LocationCoordinateSystem, LocationDatum, StatusReport, Task,
+    Alert, DetectionReport, StatusReport, Task,
     alert::{AlertStatus, AlertType},
     detection_report::{DetectionReportClassification, LocationOneof as DetectionLocationOneof},
     registration::ModeType,
@@ -94,26 +94,71 @@ where
     }
 }
 
+/// Build ordinary and closing reports from the session's current mode, rather
+/// than the mode captured at registration (tasks can change it while waiting).
+fn asm_status(state: &AsmSessionState, system: System) -> StatusReport {
+    let mode = match state {
+        AsmSessionState::Registered(contract) => contract.active_mode.mode_name.clone(),
+        _ => None,
+    };
+    StatusReport {
+        report_id: Some(Ulid::new().to_string()),
+        system: Some(system as i32),
+        info: Some(System::Ok as i32),
+        mode,
+        ..Default::default()
+    }
+}
+
+/// Receive while servicing the registered ASM's status cadence. Cancellation
+/// retains framing state in the driver; automatic replies finish before status
+/// writes. Backpressure remains bounded by the outer run deadline.
 async fn asm_poll_with_heartbeat<R, W>(
     connection: &mut AsmConnection<R, W>,
     deadline: Instant,
     waiting_for: &str,
+    next_status: &mut Option<Instant>,
+    stage: &mut &'static str,
 ) -> io::Result<PollWait>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let mut next_heartbeat = Instant::now() + HEARTBEAT_INTERVAL;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Ok(PollWait::DeadlineReached);
         }
-        let wait = remaining.min(HEARTBEAT_INTERVAL);
+        if next_status.is_some_and(|due| Instant::now() >= due) {
+            if matches!(connection.state(), AsmSessionState::Registered(_)) {
+                *stage = "send_periodic_status";
+                let status = asm_status(connection.state(), System::Ok);
+                connection.issue_status_report(status).await?;
+                *next_status = Some(
+                    Instant::now() + Duration::from_secs_f32(fixtures::STATUS_INTERVAL_SECONDS),
+                );
+            } else {
+                *next_status = None;
+            }
+            // Recompute the remaining wait after a potentially blocked send.
+            continue;
+        }
+        let status_wait = next_status
+            .map(|due| due.saturating_duration_since(Instant::now()))
+            .unwrap_or(remaining);
+        let heartbeat_wait = next_heartbeat.saturating_duration_since(Instant::now());
+        let wait = remaining.min(heartbeat_wait).min(status_wait);
+        *stage = "receive_or_reply";
         match timeout(wait, connection.poll_once()).await {
             Ok(Ok(true)) => return Ok(PollWait::Processed),
             Ok(Ok(false)) => return Ok(PollWait::Disconnected),
             Ok(Err(err)) => return Err(err),
             Err(_elapsed) if wait < remaining => {
+                if Instant::now() < next_heartbeat {
+                    continue;
+                }
+                next_heartbeat = Instant::now() + HEARTBEAT_INTERVAL;
                 let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
                 eprintln!(
                     "... still waiting {waiting_for} ({remaining}s left before this run gives up)"
@@ -349,12 +394,22 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    // Disabled until the initial ordinary status is sent after registration.
+    let mut next_status = None;
     *stage = "send_registration";
     connection.register(fixtures::valid_registration()).await?;
 
     loop {
         *stage = "receive_or_reply";
-        match asm_poll_with_heartbeat(connection, deadline, "for a RegistrationAck").await? {
+        match asm_poll_with_heartbeat(
+            connection,
+            deadline,
+            "for a RegistrationAck",
+            &mut next_status,
+            stage,
+        )
+        .await?
+        {
             PollWait::Processed => match connection.take_event() {
                 Some(AsmEvent::RegistrationAccepted) => {
                     result.complete(Check::Registration);
@@ -383,27 +438,10 @@ where
     }
     note(&mut result.notes, "Registration accepted.");
 
-    let active_mode_name = match connection.state() {
-        AsmSessionState::Registered(contract) => contract.active_mode.mode_name.clone(),
-        _ => None,
-    };
-
     *stage = "send_status_report";
-    connection
-        .issue_status_report(StatusReport {
-            report_id: Some(Ulid::new().to_string()),
-            system: Some(System::Ok as i32),
-            info: Some(System::Ok as i32),
-            active_task_id: None,
-            mode: active_mode_name,
-            power: None,
-            node_location: None,
-            field_of_view: None,
-            obscuration: vec![],
-            status: vec![],
-            coverage: vec![],
-        })
-        .await?;
+    let status = asm_status(connection.state(), System::Ok);
+    connection.issue_status_report(status).await?;
+    next_status = Some(Instant::now() + Duration::from_secs_f32(fixtures::STATUS_INTERVAL_SECONDS));
 
     result.complete(Check::StatusReport);
 
@@ -414,17 +452,9 @@ where
             object_id: Some(Ulid::new().to_string()),
             task_id: None,
             state: None,
-            location_oneof: Some(DetectionLocationOneof::Location(Location {
-                x: Some(1.0),
-                y: Some(2.0),
-                z: None,
-                x_error: None,
-                y_error: None,
-                z_error: None,
-                coordinate_system: Some(LocationCoordinateSystem::LatLngDegM as i32),
-                datum: Some(LocationDatum::Wgs84E as i32),
-                utm_zone: None,
-            })),
+            location_oneof: Some(DetectionLocationOneof::RangeBearing(
+                fixtures::detection_position(),
+            )),
             detection_confidence: None,
             track_info: vec![],
             prediction_location: None,
@@ -451,25 +481,28 @@ where
     // moving on -- not every DMM proactively does this, so this is a
     // best-effort check, not something a timeout here should be a finding,
     // and short enough that it doesn't need a heartbeat of its own.
-    let short_wait = Duration::from_secs(2).min(deadline.saturating_duration_since(Instant::now()));
-    if !short_wait.is_zero() {
-        *stage = "receive_or_reply";
-        match timeout(short_wait, connection.poll_once()).await {
-            Ok(Ok(true)) => {
-                // No required check depends on this optional observation.
-                connection.take_event();
-                note(
-                    &mut result.notes,
-                    "Processed an inbound message from the DMM (e.g. a Task) before continuing.",
-                );
-            }
-            Ok(Ok(false)) => {
-                note(&mut result.notes, "DMM under test disconnected.");
-                return Ok(());
-            }
-            Ok(Err(err)) => return Err(err),
-            Err(_elapsed) => {}
+    let short_deadline = (Instant::now() + Duration::from_secs(2)).min(deadline);
+    match asm_poll_with_heartbeat(
+        connection,
+        short_deadline,
+        "for an optional Task",
+        &mut next_status,
+        stage,
+    )
+    .await?
+    {
+        PollWait::Processed => {
+            connection.take_event();
+            note(
+                &mut result.notes,
+                "Processed an inbound message from the DMM before continuing.",
+            );
         }
+        PollWait::Disconnected => {
+            note(&mut result.notes, "DMM under test disconnected.");
+            return Ok(());
+        }
+        PollWait::DeadlineReached => {}
     }
 
     if Instant::now() >= deadline {
@@ -501,7 +534,15 @@ where
 
     loop {
         *stage = "receive_or_reply";
-        match asm_poll_with_heartbeat(connection, deadline, "for an AlertAck").await? {
+        match asm_poll_with_heartbeat(
+            connection,
+            deadline,
+            "for an AlertAck",
+            &mut next_status,
+            stage,
+        )
+        .await?
+        {
             PollWait::Processed => {
                 if let Some(AsmEvent::AlertAcknowledged {
                     alert_id: acknowledged_id,
@@ -535,21 +576,8 @@ where
         return Ok(());
     }
     *stage = "send_goodbye";
-    connection
-        .issue_status_report(StatusReport {
-            report_id: Some(Ulid::new().to_string()),
-            system: Some(System::Goodbye as i32),
-            info: None,
-            active_task_id: None,
-            mode: None,
-            power: None,
-            node_location: None,
-            field_of_view: None,
-            obscuration: vec![],
-            status: vec![],
-            coverage: vec![],
-        })
-        .await?;
+    let goodbye = asm_status(connection.state(), System::Goodbye);
+    connection.issue_status_report(goodbye).await?;
     result.complete(Check::Goodbye);
     note(
         &mut result.notes,
