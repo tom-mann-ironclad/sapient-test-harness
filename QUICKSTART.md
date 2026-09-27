@@ -65,8 +65,14 @@ locally too) and let it register.
 out to it:
 
 ```bash
-sapient-harness run --role asm --target <C2 node IP address>:5000
+sapient-harness run --role asm --target <C2 node address>:5000
 ```
+
+`--target` means different things for the two roles: for `--role dmm` it's the
+literal `ip:port` to listen on (a hostname isn't accepted -- binding needs one
+specific local address, not a resolved list); for `--role asm` it's the address
+to connect to, and accepts a hostname (`your-service.example:5000`,
+`localhost:5000`, a container/service-discovery name, etc.).
 
 Either way, the harness drives one full conformance session (registration,
 status reporting, a detection, a mode-change task, an alert) and prints a

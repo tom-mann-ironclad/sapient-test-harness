@@ -118,8 +118,8 @@ pub async fn send(args: SendArgs) -> ExitCode {
     let response_timeout = Duration::from_secs(args.response_timeout_secs);
 
     let stream = match args.role {
-        Role::Dmm => connect_as_dmm(args.target, connect_timeout).await,
-        Role::Asm => connect_as_asm(args.target, connect_timeout).await,
+        Role::Dmm => connect_as_dmm(&args.target, connect_timeout).await,
+        Role::Asm => connect_as_asm(&args.target, connect_timeout).await,
     };
     let mut stream = match stream {
         Ok(stream) => stream,
@@ -207,7 +207,16 @@ fn print_outcome(outcome: &SendOutcome, response_timeout: Duration) {
     }
 }
 
-async fn connect_as_dmm(target: SocketAddr, connect_timeout: Duration) -> io::Result<TcpStream> {
+async fn connect_as_dmm(target: &str, connect_timeout: Duration) -> io::Result<TcpStream> {
+    let target: SocketAddr = target.parse().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "--target {target:?} is not a literal address -- --role dmm listens on one \
+                 specific ip:port (e.g. 0.0.0.0:5000), not a hostname"
+            ),
+        )
+    })?;
     let listener = TcpListener::bind(target).await?;
     println!("Listening on {target} for a peer to connect...");
     let (stream, peer_addr) =
@@ -223,7 +232,7 @@ async fn connect_as_dmm(target: SocketAddr, connect_timeout: Duration) -> io::Re
     Ok(stream)
 }
 
-async fn connect_as_asm(target: SocketAddr, connect_timeout: Duration) -> io::Result<TcpStream> {
+async fn connect_as_asm(target: &str, connect_timeout: Duration) -> io::Result<TcpStream> {
     println!("Connecting to {target}...");
     let stream = timeout(connect_timeout, TcpStream::connect(target))
         .await

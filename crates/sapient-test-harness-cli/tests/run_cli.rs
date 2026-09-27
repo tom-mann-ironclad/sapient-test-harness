@@ -342,3 +342,61 @@ async fn connection_failures_and_accept_timeouts_produce_json() {
         );
     }
 }
+
+#[tokio::test]
+async fn asm_role_resolves_hostname_targets() {
+    timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &format!("localhost:{port}"),
+                "--max-runtime-secs",
+                "5",
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        // Reaching a real Registration proves "localhost" was resolved and
+        // connected to, not just accepted as a syntactically valid string.
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(matches!(receive(&mut peer).await, Content::Registration(_)));
+        drop(child);
+    })
+    .await
+    .expect("hostname target must resolve and connect within the test deadline");
+}
+
+#[tokio::test]
+async fn dmm_role_rejects_hostname_targets_without_attempting_to_bind() {
+    // No peer/listener is set up: a correct fix must fail before ever
+    // touching the network, so this test would hang (not just fail) if the
+    // rejection didn't happen up front.
+    let output = timeout(
+        Duration::from_secs(5),
+        Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "dmm",
+                "--target",
+                "localhost:0",
+                "--format",
+                "json",
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("must reject a hostname target immediately, not hang waiting to bind")
+    .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["outcome"], "incomplete");
+    let error = report["operational_error"]["message"].as_str().unwrap();
+    assert!(error.contains("not a literal address"), "{error}");
+}

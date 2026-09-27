@@ -40,7 +40,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
         Role::Dmm => {
             run_as_dmm(
                 &harness_node_id,
-                args.target,
+                &args.target,
                 connect_timeout,
                 max_runtime,
                 args.max_frame_bytes,
@@ -50,7 +50,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
         Role::Asm => {
             run_as_asm(
                 &harness_node_id,
-                args.target,
+                &args.target,
                 connect_timeout,
                 max_runtime,
                 args.max_frame_bytes,
@@ -91,11 +91,20 @@ pub async fn run(args: RunArgs) -> ExitCode {
 
 async fn run_as_dmm(
     harness_node_id: &str,
-    target: SocketAddr,
+    target: &str,
     connect_timeout: Duration,
     max_runtime: Duration,
     max_frame_bytes: u32,
 ) -> io::Result<(Vec<Finding>, ScenarioResult)> {
+    let target: SocketAddr = target.parse().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "--target {target:?} is not a literal address -- --role dmm listens on one \
+                 specific ip:port (e.g. 0.0.0.0:5000), not a hostname"
+            ),
+        )
+    })?;
     let listener = TcpListener::bind(target).await?;
     eprintln!("Listening on {target} for an ASM to connect...");
     let (stream, peer_addr) =
@@ -131,7 +140,7 @@ async fn run_as_dmm(
 
 async fn run_as_asm(
     harness_node_id: &str,
-    target: SocketAddr,
+    target: &str,
     connect_timeout: Duration,
     max_runtime: Duration,
     max_frame_bytes: u32,

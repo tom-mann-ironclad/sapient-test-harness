@@ -1,7 +1,6 @@
 //! Command-line argument definitions.
 
 use std::fmt;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -46,10 +45,12 @@ pub struct SendArgs {
     #[arg(long, value_enum)]
     pub role: Role,
 
-    /// For `--role dmm`, the address to listen on. For `--role asm`, the
-    /// address to connect to.
+    /// For `--role dmm`, the literal `ip:port` to listen on (a hostname
+    /// isn't accepted here -- binding needs one specific local address, not
+    /// a resolved list). For `--role asm`, the address to connect to; this
+    /// one does accept `host:port`, resolved when connecting.
     #[arg(long)]
-    pub target: SocketAddr,
+    pub target: String,
 
     /// Maximum incoming payload bytes (local resource limit, not a conformance rule).
     #[arg(long, default_value_t = sapient_session::framing::DEFAULT_MAX_FRAME_BYTES)]
@@ -93,10 +94,12 @@ pub struct RunArgs {
     #[arg(long, value_enum)]
     pub role: Role,
 
-    /// For `--role dmm`, the address to listen on. For `--role asm`, the
-    /// address to connect to.
+    /// For `--role dmm`, the literal `ip:port` to listen on (a hostname
+    /// isn't accepted here -- binding needs one specific local address, not
+    /// a resolved list). For `--role asm`, the address to connect to; this
+    /// one does accept `host:port`, resolved when connecting.
     #[arg(long)]
-    pub target: SocketAddr,
+    pub target: String,
 
     /// Maximum incoming payload bytes (local resource limit, not a conformance rule).
     #[arg(long, default_value_t = sapient_session::framing::DEFAULT_MAX_FRAME_BYTES)]
