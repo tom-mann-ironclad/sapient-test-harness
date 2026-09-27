@@ -4,10 +4,13 @@
 //! that's the one thing this file's direct `on_bytes` calls don't touch.
 
 use sapient_conformance_core::bsi_flex_335_v2_0::{
-    Alert, DetectionReport, SapientMessage, StatusReport, Task, TaskAck,
+    Alert, DetectionReport, Location, SapientMessage, StatusReport, Task, TaskAck,
     alert::LocationOneof,
-    detection_report::{DetectionReportClassification, LocationOneof as DetectionLocationOneof},
-    registration::ModeType,
+    detection_report::{
+        DetectionReportClassification, LocationOneof as DetectionLocationOneof,
+        SubClass as ReportedSubClass,
+    },
+    registration::{ModeType, SubClass as DeclaredSubClass},
     sapient_message::Content,
     status_report::System,
     task::{Command, command::Command as TaskCommandKind},
@@ -18,7 +21,7 @@ use sapient_session::{DmmEvent, DmmSession, SessionState};
 mod common;
 use common::{
     ALTERNATE_MODE, DECLARED_CLASSIFICATION_TYPE, DEFAULT_MODE, STATUS_INTERVAL_SECONDS, decode,
-    encode, envelope, mode, valid_registration,
+    detection_position, encode, envelope, mode, valid_registration,
 };
 
 const HARNESS_NODE_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
@@ -457,19 +460,7 @@ fn detection_report_with_declared_classification_produces_no_finding() {
             object_id: Some("01H1VV3VN40RV97CDFSXJB44KA".to_string()),
             task_id: None,
             state: None,
-            location_oneof: Some(DetectionLocationOneof::Location(
-                sapient_conformance_core::bsi_flex_335_v2_0::Location {
-                    x: Some(1.0),
-                    y: Some(2.0),
-                    z: None,
-                    x_error: None,
-                    y_error: None,
-                    z_error: None,
-                    coordinate_system: Some(1),
-                    datum: Some(1),
-                    utm_zone: None,
-                },
-            )),
+            location_oneof: Some(DetectionLocationOneof::RangeBearing(detection_position())),
             detection_confidence: None,
             track_info: vec![],
             prediction_location: None,
@@ -507,19 +498,7 @@ fn detection_report_with_undeclared_classification_is_a_finding() {
             object_id: Some("01H1VV3VN40RV97CDFSXJB44KA".to_string()),
             task_id: None,
             state: None,
-            location_oneof: Some(DetectionLocationOneof::Location(
-                sapient_conformance_core::bsi_flex_335_v2_0::Location {
-                    x: Some(1.0),
-                    y: Some(2.0),
-                    z: None,
-                    x_error: None,
-                    y_error: None,
-                    z_error: None,
-                    coordinate_system: Some(1),
-                    datum: Some(1),
-                    utm_zone: None,
-                },
-            )),
+            location_oneof: Some(DetectionLocationOneof::RangeBearing(detection_position())),
             detection_confidence: None,
             track_info: vec![],
             prediction_location: None,
@@ -545,6 +524,195 @@ fn detection_report_with_undeclared_classification_is_a_finding() {
             .findings()
             .iter()
             .any(|f| f.rule_id == "session.detection_report.undeclared_classification"),
+    );
+}
+
+fn detection_report_at(location_oneof: Option<DetectionLocationOneof>) -> DetectionReport {
+    DetectionReport {
+        report_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+        object_id: Some("01H1VV3VN40RV97CDFSXJB44KA".to_string()),
+        location_oneof,
+        classification: vec![DetectionReportClassification {
+            r#type: Some(DECLARED_CLASSIFICATION_TYPE.to_string()),
+            confidence: None,
+            sub_class: vec![],
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn detection_report_with_mismatched_location_type_is_a_finding() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    register(&mut session);
+
+    // The registered fixture's active mode declares a range-bearing
+    // location_type; reporting Cartesian x/y/z instead is undeclared, not
+    // just a differently-shaped valid report.
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        1,
+        Content::DetectionReport(detection_report_at(Some(DetectionLocationOneof::Location(
+            Location {
+                x: Some(1.0),
+                y: Some(2.0),
+                coordinate_system: Some(1),
+                datum: Some(1),
+                ..Default::default()
+            },
+        )))),
+    )));
+
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "session.detection_report.location_type_mismatch"),
+    );
+}
+
+#[test]
+fn detection_report_location_with_no_declared_location_type_is_a_finding() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    // A mode declaring no detection_definition at all has declared no
+    // location contract; that must not be read as "anything goes".
+    registration.mode_definition[0].detection_definition = vec![];
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        0,
+        Content::Registration(registration),
+    )));
+
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        1,
+        Content::DetectionReport(detection_report_at(Some(
+            DetectionLocationOneof::RangeBearing(detection_position()),
+        ))),
+    )));
+
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "session.detection_report.location_type_mismatch"),
+    );
+}
+
+#[test]
+fn detection_report_classification_with_no_declared_taxonomy_is_a_finding() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    // A mode declaring no classification taxonomy at all has declared no
+    // classification contract; reporting one anyway is undeclared, exactly
+    // like reporting an unrecognized one against a non-empty taxonomy.
+    registration.mode_definition[0].detection_definition[0].detection_class_definition = vec![];
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        0,
+        Content::Registration(registration),
+    )));
+
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        1,
+        Content::DetectionReport(detection_report_at(Some(
+            DetectionLocationOneof::RangeBearing(detection_position()),
+        ))),
+    )));
+
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "session.detection_report.undeclared_classification"),
+    );
+}
+
+#[test]
+fn detection_report_with_declared_subclass_produces_no_finding() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    registration.mode_definition[0].detection_definition[0].detection_class_definition[0]
+        .class_definition[0]
+        .sub_class = vec![DeclaredSubClass {
+        r#type: Some("Adult".to_string()),
+        units: None,
+        level: Some(1),
+        sub_class: vec![],
+    }];
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        0,
+        Content::Registration(registration),
+    )));
+
+    let mut report = detection_report_at(Some(DetectionLocationOneof::RangeBearing(
+        detection_position(),
+    )));
+    report.classification[0].sub_class = vec![ReportedSubClass {
+        r#type: Some("Adult".to_string()),
+        confidence: None,
+        level: Some(1),
+        sub_class: vec![],
+    }];
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        1,
+        Content::DetectionReport(report),
+    )));
+
+    assert!(session.findings().is_empty());
+}
+
+#[test]
+fn detection_report_with_undeclared_subclass_is_a_finding() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let mut registration = valid_registration();
+    registration.mode_definition[0].detection_definition[0].detection_class_definition[0]
+        .class_definition[0]
+        .sub_class = vec![DeclaredSubClass {
+        r#type: Some("Adult".to_string()),
+        units: None,
+        level: Some(1),
+        sub_class: vec![],
+    }];
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        0,
+        Content::Registration(registration),
+    )));
+
+    let mut report = detection_report_at(Some(DetectionLocationOneof::RangeBearing(
+        detection_position(),
+    )));
+    report.classification[0].sub_class = vec![ReportedSubClass {
+        r#type: Some("Child".to_string()),
+        confidence: None,
+        level: Some(1),
+        sub_class: vec![],
+    }];
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        1,
+        Content::DetectionReport(report),
+    )));
+
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "session.detection_report.undeclared_subclassification"),
     );
 }
 

@@ -18,8 +18,8 @@ use sapient_conformance_core::bsi_flex_335_v2_0::{SapientMessage, sapient_messag
 use sapient_session::framing::{read_frame, write_frame};
 
 pub use sapient_session::fixtures::{
-    ALTERNATE_MODE, DECLARED_CLASSIFICATION_TYPE, DEFAULT_MODE, STATUS_INTERVAL_SECONDS, duration,
-    mode, valid_location_type, valid_registration,
+    ALTERNATE_MODE, DECLARED_CLASSIFICATION_TYPE, DEFAULT_MODE, STATUS_INTERVAL_SECONDS,
+    detection_position, duration, mode, valid_location_type, valid_registration,
 };
 
 pub fn timestamp(seconds: i64) -> Timestamp {

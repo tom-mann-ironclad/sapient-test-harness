@@ -27,7 +27,10 @@ use sapient_session::{AsmSessionState, SessionState, asm::AsmConnection, dmm::Dm
 use tokio::io::split;
 
 mod common;
-use common::{ALTERNATE_MODE, DECLARED_CLASSIFICATION_TYPE, DEFAULT_MODE, valid_registration};
+use common::{
+    ALTERNATE_MODE, DECLARED_CLASSIFICATION_TYPE, DEFAULT_MODE, detection_position,
+    valid_registration,
+};
 
 const DMM_HARNESS_NODE_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
 const ASM_HARNESS_NODE_ID: &str = "550e8400-e29b-41d4-a716-446655440001";
@@ -67,27 +70,16 @@ async fn our_own_dmm_and_asm_interoperate() {
     assert!(dmm.poll_once().await.unwrap());
 
     // DetectionReport, classifying the object as the type our shared
-    // registration fixture actually declared for the active mode -- this
-    // exercises the DMM's declared-vs-actual cross-check as a real
+    // registration fixture actually declared for the active mode, and
+    // located in the coordinate system/datum that fixture declared too --
+    // this exercises the DMM's declared-vs-actual cross-check as a real
     // pass, not just an isolated unit test of the check itself.
     asm.issue_detection_report(DetectionReport {
         report_id: Some("01H1VV3VN40RV97CDFSXJB44KB".to_string()),
         object_id: Some("01H1VV3VN40RV97CDFSXJB44KC".to_string()),
         task_id: None,
         state: None,
-        location_oneof: Some(DetectionLocationOneof::Location(
-            sapient_conformance_core::bsi_flex_335_v2_0::Location {
-                x: Some(1.0),
-                y: Some(2.0),
-                z: None,
-                x_error: None,
-                y_error: None,
-                z_error: None,
-                coordinate_system: Some(1),
-                datum: Some(1),
-                utm_zone: None,
-            },
-        )),
+        location_oneof: Some(DetectionLocationOneof::RangeBearing(detection_position())),
         detection_confidence: None,
         track_info: vec![],
         prediction_location: None,

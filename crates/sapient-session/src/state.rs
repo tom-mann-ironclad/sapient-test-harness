@@ -466,6 +466,24 @@ impl DmmSession {
         None
     }
 
+    /// Declared-vs-actual contract enforcement for a `DetectionReport`. This
+    /// checks: (1) the reported location's coordinate system and datum match
+    /// one the active mode declared in a `detection_definition.location_type`,
+    /// and (2) each reported classification (and, recursively, each reported
+    /// sub-class) names a type the active mode actually declared somewhere in
+    /// its `detection_class_definition` taxonomy. A mode declaring nothing at
+    /// all for either of these is a contract that permits nothing there --
+    /// this deliberately does not fall back to "no declaration means
+    /// unconstrained", since that would let an ASM report structure the DMM
+    /// never agreed to receive.
+    ///
+    /// Deliberately out of scope here, and not otherwise enforced anywhere in
+    /// the session layer: `PerformanceValue`/`GeometricError`-based numeric
+    /// contracts (declared performance figures are informational, not
+    /// constraints on any single report), `TaxonomyDockDefinition` extension
+    /// docking, behaviour taxonomy, and velocity type/units. Confidence-value
+    /// range checks are payload-level concerns already covered by
+    /// `validate_detection_report`, independent of this function.
     fn handle_detection_report(
         &mut self,
         peer_timestamp: Option<Timestamp>,
@@ -484,28 +502,44 @@ impl DmmSession {
             return Some(self.error_reply(vec!["DetectionReport failed validation.".to_string()]));
         }
 
-        // Declared-vs-actual, first pass (enum/category membership only
-        // , full structural matching is deferred): a reported
-        // classification type should be one the active mode actually
-        // declared somewhere in its detection class definitions.
         let previous_mode = contract
             .mode_transition
             .as_ref()
             .filter(|transition| transition.permits_previous(peer_timestamp))
             .map(|transition| &transition.previous_mode);
-        let declared_types: HashSet<&str> = std::iter::once(&contract.active_mode)
-            .chain(previous_mode)
-            .flat_map(|mode| &mode.detection_definition)
-            .flat_map(|definition| definition.detection_class_definition.iter())
-            .flat_map(|class_definition| class_definition.class_definition.iter())
-            .filter_map(|class| class.r#type.as_deref())
-            .collect();
+        let declared_modes = || std::iter::once(&contract.active_mode).chain(previous_mode);
 
-        if !declared_types.is_empty() {
-            for classification in &detection_report.classification {
-                if let Some(reported_type) = classification.r#type.as_deref()
-                    && !declared_types.contains(reported_type)
-                {
+        if let Some(location) = &detection_report.location_oneof {
+            let matches_declared = declared_modes()
+                .flat_map(|mode| &mode.detection_definition)
+                .filter_map(|definition| definition.location_type.as_ref())
+                .any(|declared| location_matches_declared_type(location, declared));
+            if !matches_declared {
+                self.findings.push(Finding {
+                    rule_id: "session.detection_report.location_type_mismatch".to_string(),
+                    field_path: "detection_report.location_oneof".to_string(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "DetectionReport's location coordinate system/datum does not match any \
+                         detection_definition.location_type the active mode ({:?}) declared.",
+                        contract.active_mode.mode_name
+                    ),
+                });
+            }
+        }
+
+        for classification in &detection_report.classification {
+            let Some(reported_type) = classification.r#type.as_deref() else {
+                continue;
+            };
+            let declared_class = declared_modes()
+                .flat_map(|mode| &mode.detection_definition)
+                .flat_map(|definition| definition.detection_class_definition.iter())
+                .flat_map(|class_definition| class_definition.class_definition.iter())
+                .find(|class| class.r#type.as_deref() == Some(reported_type));
+
+            match declared_class {
+                None => {
                     self.findings.push(Finding {
                         rule_id: "session.detection_report.undeclared_classification".to_string(),
                         field_path: "detection_report.classification.type".to_string(),
@@ -517,6 +551,15 @@ impl DmmSession {
                             contract.active_mode.mode_name
                         ),
                     });
+                }
+                Some(declared_class) => {
+                    validate_declared_subclasses(
+                        &classification.sub_class,
+                        &declared_class.sub_class,
+                        contract.active_mode.mode_name.as_deref(),
+                        reported_type,
+                        &mut self.findings,
+                    );
                 }
             }
         }
@@ -885,6 +928,84 @@ fn duration_to_seconds(
         TimeUnits::Days => 86400.0,
     };
     Some(value * multiplier)
+}
+
+/// Whether a reported detection location's coordinate system and datum match
+/// one the active mode declared via a `detection_definition.location_type`.
+/// The oneof kind (range-bearing vs Cartesian) must match too -- a mode that
+/// only declared Cartesian location never licenses a range-bearing report.
+fn location_matches_declared_type(
+    reported: &sapient_conformance_core::bsi_flex_335_v2_0::detection_report::LocationOneof,
+    declared: &sapient_conformance_core::bsi_flex_335_v2_0::registration::LocationType,
+) -> bool {
+    use sapient_conformance_core::bsi_flex_335_v2_0::detection_report::LocationOneof;
+    use sapient_conformance_core::bsi_flex_335_v2_0::registration::location_type::{
+        CoordinatesOneof, DatumOneof,
+    };
+
+    match reported {
+        LocationOneof::RangeBearing(range_bearing) => matches!(
+            (declared.coordinates_oneof.as_ref(), declared.datum_oneof.as_ref()),
+            (
+                Some(CoordinatesOneof::RangeBearingUnits(units)),
+                Some(DatumOneof::RangeBearingDatum(datum)),
+            ) if Some(*units) == range_bearing.coordinate_system
+                && Some(*datum) == range_bearing.datum
+        ),
+        LocationOneof::Location(location) => matches!(
+            (declared.coordinates_oneof.as_ref(), declared.datum_oneof.as_ref()),
+            (
+                Some(CoordinatesOneof::LocationUnits(units)),
+                Some(DatumOneof::LocationDatum(datum)),
+            ) if Some(*units) == location.coordinate_system
+                && Some(*datum) == location.datum
+        ),
+    }
+}
+
+/// Recursively check that every reported sub-classification names a type
+/// declared at the matching position in the active mode's classification
+/// taxonomy. A reported sub-class with no declared counterpart at that
+/// position is a finding; its own children are not descended into, since
+/// there is nothing declared there to check them against.
+fn validate_declared_subclasses(
+    reported: &[sapient_conformance_core::bsi_flex_335_v2_0::detection_report::SubClass],
+    declared: &[sapient_conformance_core::bsi_flex_335_v2_0::registration::SubClass],
+    mode_name: Option<&str>,
+    ancestry: &str,
+    findings: &mut Vec<Finding>,
+) {
+    for sub in reported {
+        let Some(sub_type) = sub.r#type.as_deref() else {
+            continue;
+        };
+        match declared
+            .iter()
+            .find(|d| d.r#type.as_deref() == Some(sub_type))
+        {
+            None => {
+                findings.push(Finding {
+                    rule_id: "session.detection_report.undeclared_subclassification".to_string(),
+                    field_path: "detection_report.classification.sub_class.type".to_string(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "DetectionReport reports sub-class {sub_type:?} under {ancestry}, which \
+                         the active mode ({mode_name:?}) never declared there."
+                    ),
+                });
+            }
+            Some(declared_sub) => {
+                let next_ancestry = format!("{ancestry} > {sub_type}");
+                validate_declared_subclasses(
+                    &sub.sub_class,
+                    &declared_sub.sub_class,
+                    mode_name,
+                    &next_ancestry,
+                    findings,
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
