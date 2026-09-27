@@ -43,6 +43,15 @@ pub enum DmmEvent {
     /// Envelope diagnostics do not suppress this progress event.
     /// The driver still has to transmit the returned RegistrationAck.
     RegistrationAccepted,
+    /// A registration (first attempt or a re-registration) was rejected --
+    /// invalid payload, or no mode resolvable as the initial active mode.
+    /// Any previously registered contract has already been dropped when
+    /// this fires; the session is `AwaitingRegistration`. Distinguishing
+    /// this from `GoodbyeReceived` is the whole point of this variant --
+    /// scenarios must not infer "the peer said goodbye" from the state
+    /// snapshot alone, since a rejected re-registration lands in the same
+    /// state for a completely different reason.
+    RegistrationRejected,
     /// A non-GoodBye report passed payload validation. Session-level findings
     /// (such as a mode mismatch or late interval) may still accompany it.
     StatusReportValidated,
@@ -279,6 +288,7 @@ impl DmmSession {
             // re-declaration, and a failed one shouldn't leave a
             // stale contract quietly in effect.
             self.state = SessionState::AwaitingRegistration;
+            self.event = Some(DmmEvent::RegistrationRejected);
             return Some(self.registration_ack_reply(false, vec![reason]));
         }
 
@@ -327,6 +337,7 @@ impl DmmSession {
                         .to_string(),
                 });
                 self.state = SessionState::AwaitingRegistration;
+                self.event = Some(DmmEvent::RegistrationRejected);
                 return Some(self.registration_ack_reply(
                     false,
                     vec![
@@ -347,6 +358,7 @@ impl DmmSession {
                     ),
                 });
                 self.state = SessionState::AwaitingRegistration;
+                self.event = Some(DmmEvent::RegistrationRejected);
                 return Some(self.registration_ack_reply(
                     false,
                     vec![

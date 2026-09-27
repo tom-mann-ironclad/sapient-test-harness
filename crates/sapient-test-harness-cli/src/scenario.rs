@@ -275,12 +275,17 @@ where
             PollWait::Processed => match connection.take_event() {
                 Some(DmmEvent::RegistrationAccepted) => {
                     result.complete(Check::Registration);
-                    // Before a probe is sent, replacement registration may change
-                    // whether it is applicable. Once sent, only its ack completes it.
-                    if issued_task_id.is_some() {
-                        continue;
-                    }
+                    // Every accepted registration -- first attempt or a
+                    // replacement -- starts a fresh epoch: the session
+                    // itself wipes outstanding tasks on replacement (a
+                    // stale issued_task_id can never be acknowledged
+                    // again), and a replacement contract may declare
+                    // entirely different modes, so evidence from a
+                    // discarded contract shouldn't excuse the new one from
+                    // demonstrating the same behaviour again.
                     status_received = false;
+                    issued_task_id = None;
+                    target_mode = None;
                     result.require(Check::StatusReport);
                     result.require(Check::TaskAck);
                     if let SessionState::Registered(contract) = connection.state() {
@@ -297,6 +302,27 @@ where
                             "Registration declares no non-default mode for the probe task.",
                         );
                     }
+                }
+                Some(DmmEvent::RegistrationRejected) => {
+                    // Distinct from GoodbyeReceived on purpose: the session
+                    // is AwaitingRegistration for a completely different
+                    // reason (the ASM's own findings explain why), and --
+                    // unlike GoodBye -- this doesn't end the run. A
+                    // corrected registration on the same connection is
+                    // still perfectly usable. Already-completed checks are
+                    // left alone: they're valid evidence from whatever
+                    // contract was in effect when they completed, not
+                    // undone by a later, unrelated rejection. Local
+                    // per-epoch tracking is cleared since there's no live
+                    // contract for it to refer to any more.
+                    note(
+                        &mut result.notes,
+                        "ASM's registration was rejected (see findings); waiting for a valid \
+                         one on the same connection.",
+                    );
+                    status_received = false;
+                    issued_task_id = None;
+                    target_mode = None;
                 }
                 Some(DmmEvent::StatusReportValidated) => {
                     status_received = true;

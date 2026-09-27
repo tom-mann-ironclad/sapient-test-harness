@@ -428,6 +428,213 @@ async fn reregistration_before_probe_uses_new_contract_and_requires_ack() {
     check(&result, Check::TaskAck, CheckStatus::Incomplete);
 }
 
+/// A rejected re-registration must not be reported as GoodBye (the
+/// two land in the same `AwaitingRegistration` state for completely
+/// different reasons), and a corrected registration on the same connection
+/// must still be usable afterward.
+#[tokio::test(start_paused = true)]
+async fn rejected_reregistration_is_not_mistaken_for_goodbye() {
+    let (stream, mut peer) = duplex(65536);
+    let (r, w) = split(stream);
+    let mut dmm = DmmConnection::new(NODE, r, w);
+    let target = async move {
+        send(
+            &mut peer,
+            Content::Registration(fixtures::valid_registration()),
+        )
+        .await;
+        assert!(matches!(
+            receive(&mut peer).await,
+            Content::RegistrationAck(_)
+        ));
+
+        let mut invalid = fixtures::valid_registration();
+        invalid.icd_version = Some("wrong version".into());
+        send(&mut peer, Content::Registration(invalid)).await;
+        match receive(&mut peer).await {
+            Content::RegistrationAck(ack) => assert_eq!(ack.acceptance, Some(false)),
+            other => panic!("expected a rejecting RegistrationAck, got {other:?}"),
+        }
+
+        send(
+            &mut peer,
+            Content::Registration(fixtures::valid_registration()),
+        )
+        .await;
+        assert!(matches!(
+            receive(&mut peer).await,
+            Content::RegistrationAck(_)
+        ));
+
+        send(
+            &mut peer,
+            Content::StatusReport(StatusReport {
+                report_id: Some(ID.into()),
+                system: Some(1),
+                info: Some(1),
+                mode: Some("Default".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let Content::Task(task) = receive(&mut peer).await else {
+            panic!("expected a probe task for the corrected registration")
+        };
+        send(
+            &mut peer,
+            Content::TaskAck(TaskAck {
+                task_id: task.task_id,
+                task_status: Some(1),
+                ..Default::default()
+            }),
+        )
+        .await;
+        send(
+            &mut peer,
+            Content::StatusReport(StatusReport {
+                report_id: Some(ID.into()),
+                system: Some(5),
+                info: Some(1),
+                mode: Some("Default".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+    };
+    let (result, ()) = tokio::join!(
+        run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
+        target
+    );
+    let result = report(Role::Dmm, result, dmm.take_findings());
+    // The invalid re-registration is a genuine conformance violation, so
+    // the run correctly fails overall -- but that's a separate question
+    // from whether the scenario kept going and completed its checks after
+    // it, which is what this test actually targets.
+    verdict(&result, RunOutcome::Failed);
+    check(&result, Check::Registration, CheckStatus::Completed);
+    check(&result, Check::StatusReport, CheckStatus::Completed);
+    check(&result, Check::TaskAck, CheckStatus::Completed);
+    // The rejection produces its own distinct note, not a "sent a GoodBye"
+    // claim -- and the run demonstrably kept going afterward, since the
+    // real GoodBye at the very end (from the *third* message exchange) is
+    // still there too.
+    assert_eq!(
+        result
+            .notes
+            .iter()
+            .filter(|note| note.contains("registration was rejected"))
+            .count(),
+        1,
+        "{:?}",
+        result.notes
+    );
+    assert_eq!(
+        result.notes.last().map(String::as_str),
+        Some("ASM sent a GoodBye StatusReport; ending the run."),
+        "the run should reach the real, later GoodBye, proving the \
+         rejection didn't end it early: {:?}",
+        result.notes
+    );
+}
+
+/// Replacing the contract while a probe task is still outstanding
+/// must not leave the scenario permanently waiting on a task the session
+/// itself already discarded (re-registration clears outstanding tasks) --
+/// it must recompute the probe against the new contract instead.
+#[tokio::test(start_paused = true)]
+async fn reregistration_after_probe_issued_starts_a_fresh_epoch() {
+    let (stream, mut peer) = duplex(65536);
+    let (r, w) = split(stream);
+    let mut dmm = DmmConnection::new(NODE, r, w);
+    let target = async move {
+        send(
+            &mut peer,
+            Content::Registration(fixtures::valid_registration()),
+        )
+        .await;
+        receive(&mut peer).await;
+
+        send(
+            &mut peer,
+            Content::StatusReport(StatusReport {
+                report_id: Some(ID.into()),
+                system: Some(1),
+                info: Some(1),
+                mode: Some("Default".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let Content::Task(first_task) = receive(&mut peer).await else {
+            panic!("expected the first probe task")
+        };
+        assert_eq!(
+            first_task.command.unwrap().command,
+            Some(
+                sapient_conformance_core::bsi_flex_335_v2_0::task::command::Command::ModeChange(
+                    "Alternate".into()
+                )
+            )
+        );
+
+        // Replace the contract without ever acknowledging the first probe.
+        let mut replacement = fixtures::valid_registration();
+        replacement.mode_definition[1].mode_name = Some("Replacement".into());
+        send(&mut peer, Content::Registration(replacement)).await;
+        receive(&mut peer).await;
+
+        send(
+            &mut peer,
+            Content::StatusReport(StatusReport {
+                report_id: Some(ID.into()),
+                system: Some(1),
+                info: Some(1),
+                mode: Some("Default".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let Content::Task(second_task) = receive(&mut peer).await else {
+            panic!("expected a fresh probe issued against the new contract")
+        };
+        assert_eq!(
+            second_task.command.unwrap().command,
+            Some(
+                sapient_conformance_core::bsi_flex_335_v2_0::task::command::Command::ModeChange(
+                    "Replacement".into()
+                )
+            )
+        );
+        send(
+            &mut peer,
+            Content::TaskAck(TaskAck {
+                task_id: second_task.task_id,
+                task_status: Some(1),
+                ..Default::default()
+            }),
+        )
+        .await;
+        send(
+            &mut peer,
+            Content::StatusReport(StatusReport {
+                report_id: Some(ID.into()),
+                system: Some(5),
+                info: Some(1),
+                mode: Some("Default".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+    };
+    let (result, ()) = tokio::join!(
+        run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
+        target
+    );
+    let result = report(Role::Dmm, result, dmm.take_findings());
+    verdict(&result, RunOutcome::Passed);
+    check(&result, Check::TaskAck, CheckStatus::Completed);
+}
+
 #[tokio::test(start_paused = true)]
 async fn deadline_after_registration_before_alert_is_incomplete() {
     let (stream, mut peer) = duplex(65536);

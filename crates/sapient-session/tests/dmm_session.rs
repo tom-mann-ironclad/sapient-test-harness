@@ -13,7 +13,7 @@ use sapient_conformance_core::bsi_flex_335_v2_0::{
     task::{Command, command::Command as TaskCommandKind},
     task_ack::TaskStatus,
 };
-use sapient_session::{DmmSession, SessionState};
+use sapient_session::{DmmEvent, DmmSession, SessionState};
 
 mod common;
 use common::{
@@ -113,6 +113,9 @@ fn invalid_registration_is_rejected_via_registration_ack_not_error() {
         session.state(),
         SessionState::AwaitingRegistration
     ));
+    // KI-032: a rejected registration must be distinguishable from GoodBye --
+    // scenarios must not infer it from the AwaitingRegistration snapshot alone.
+    assert_eq!(session.take_event(), Some(DmmEvent::RegistrationRejected));
 }
 
 #[test]
@@ -210,6 +213,7 @@ fn registration_with_no_default_or_permanent_mode_is_rejected() {
             .iter()
             .any(|f| f.rule_id == "session.registration.no_default_mode"),
     );
+    assert_eq!(session.take_event(), Some(DmmEvent::RegistrationRejected));
 }
 
 #[test]
@@ -241,6 +245,7 @@ fn registration_with_multiple_default_modes_is_rejected() {
             .iter()
             .any(|f| f.rule_id == "session.registration.multiple_default_modes"),
     );
+    assert_eq!(session.take_event(), Some(DmmEvent::RegistrationRejected));
 }
 
 #[test]
