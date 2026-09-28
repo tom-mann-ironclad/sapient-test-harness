@@ -8,8 +8,8 @@ use crate::bsi_flex_335_v2_0::{
 };
 use crate::finding::ValidationOutcome;
 use crate::validation::common::{
-    validate_associated_detection, validate_associated_file,
-    validate_location as validate_common_location,
+    validate_associated_detection, validate_associated_file, validate_finite,
+    validate_finite_non_negative, validate_location as validate_common_location,
     validate_range_bearing as validate_common_range_bearing, validate_timestamp, validate_ulid,
     validate_unit_interval,
 };
@@ -283,6 +283,24 @@ fn validate_signal(signal: Signal) -> ValidationOutcome {
         );
     }
 
+    // Amplitude and frequency are never negative under any convention.
+    for (value, field) in [
+        (signal.amplitude, "amplitude"),
+        (signal.start_frequency, "start_frequency"),
+        (signal.centre_frequency, "centre_frequency"),
+        (signal.stop_frequency, "stop_frequency"),
+        (signal.pulse_duration, "pulse_duration"),
+    ] {
+        let validation = validate_finite_non_negative(
+            value,
+            format!("detection_report.signal.{field}.invalid"),
+            "Signal value must be a finite number 0 or greater in detection report.",
+        );
+        if !validation.passed {
+            return validation;
+        }
+    }
+
     ValidationOutcome::pass()
 }
 
@@ -335,6 +353,26 @@ fn validate_enu_velocity(enu_velocity: EnuVelocity) -> ValidationOutcome {
             "detection_report.enu_velocity.north_rate.missing",
             "ENU velocity north rate must be specified in detection report.",
         );
+    }
+
+    // A rate is a signed vector component (direction matters), so only
+    // finiteness is enforced here -- no non-negativity.
+    for (value, field) in [
+        (enu_velocity.east_rate, "east_rate"),
+        (enu_velocity.north_rate, "north_rate"),
+        (enu_velocity.up_rate, "up_rate"),
+        (enu_velocity.east_rate_error, "east_rate_error"),
+        (enu_velocity.north_rate_error, "north_rate_error"),
+        (enu_velocity.up_rate_error, "up_rate_error"),
+    ] {
+        let validation = validate_finite(
+            value,
+            format!("detection_report.enu_velocity.{field}.invalid"),
+            "ENU velocity rate must be a finite number in detection report.",
+        );
+        if !validation.passed {
+            return validation;
+        }
     }
 
     ValidationOutcome::pass()
@@ -821,6 +859,99 @@ mod detection_report_validation_tests {
         assert_eq!(
             ValidationOutcome::pass(),
             validate_range_bearing(no_coordinate_range_bearing, "test.range_bearing")
+        );
+    }
+
+    fn detection_report_with(
+        signal: Vec<Signal>,
+        velocity_oneof: Option<VelocityOneof>,
+    ) -> DetectionReport {
+        DetectionReport {
+            report_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            object_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            task_id: None,
+            state: None,
+            detection_confidence: None,
+            track_info: vec![],
+            prediction_location: None,
+            object_info: vec![],
+            classification: vec![],
+            behaviour: vec![],
+            associated_file: vec![],
+            signal,
+            associated_detection: vec![],
+            derived_detection: vec![],
+            colour: None,
+            id: None,
+            location_oneof: Some(LocationOneof::Location(Location {
+                x: Some(1.0),
+                y: Some(1.0),
+                z: None,
+                x_error: None,
+                y_error: None,
+                z_error: None,
+                coordinate_system: Some(1),
+                datum: Some(1),
+                utm_zone: None,
+            })),
+            velocity_oneof,
+        }
+    }
+
+    #[test]
+    fn test_signal_negative_and_non_finite_values_are_findings() {
+        assert_eq!(
+            ValidationOutcome::fail(
+                "detection_report.signal.amplitude.invalid",
+                "Signal value must be a finite number 0 or greater in detection report."
+            ),
+            validate_detection_report(detection_report_with(
+                vec![Signal {
+                    amplitude: Some(f32::NAN),
+                    start_frequency: None,
+                    centre_frequency: Some(10.0),
+                    stop_frequency: None,
+                    pulse_duration: None,
+                }],
+                None
+            ))
+        );
+        assert_eq!(
+            ValidationOutcome::fail(
+                "detection_report.signal.centre_frequency.invalid",
+                "Signal value must be a finite number 0 or greater in detection report."
+            ),
+            validate_detection_report(detection_report_with(
+                vec![Signal {
+                    amplitude: Some(1.0),
+                    start_frequency: None,
+                    centre_frequency: Some(-1.0),
+                    stop_frequency: None,
+                    pulse_duration: None,
+                }],
+                None
+            ))
+        );
+    }
+
+    #[test]
+    fn test_enu_velocity_non_finite_rate_is_a_finding() {
+        assert_eq!(
+            ValidationOutcome::fail(
+                "detection_report.enu_velocity.east_rate.invalid",
+                "ENU velocity rate must be a finite number in detection report."
+            ),
+            validate_detection_report(detection_report_with(
+                vec![],
+                Some(VelocityOneof::EnuVelocity(EnuVelocity {
+                    east_rate: Some(f64::INFINITY),
+                    north_rate: Some(1.0),
+                    up_rate: None,
+                    east_rate_error: None,
+                    north_rate_error: None,
+                    up_rate_error: None,
+                }))
+            ))
         );
     }
 }

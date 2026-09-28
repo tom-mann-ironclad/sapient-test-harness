@@ -2,12 +2,33 @@ use crate::bsi_flex_335_v2_0::{Alert, alert::LocationOneof};
 use crate::finding::ValidationOutcome;
 use crate::validation::common::{
     validate_associated_detection, validate_associated_file, validate_location,
-    validate_range_bearing, validate_ulid, validate_unit_interval,
+    validate_optional_enum, validate_range_bearing, validate_ulid, validate_unit_interval,
 };
 
 /// Function to validation a SAPIENT alert message
 pub fn validate_alert(alert: Alert) -> ValidationOutcome {
     let mut validations = vec![validate_alert_id(alert.alert_id)];
+
+    // `AlertType`, `AlertStatus`, and `DiscretePriority` are all optional
+    // and have no reserved gaps (0-6, 0-5, and 0-3 respectively).
+    validations.push(validate_optional_enum(
+        alert.alert_type,
+        6,
+        "alert.alert_type.invalid",
+        "Alert type is not a valid option in an alert message.",
+    ));
+    validations.push(validate_optional_enum(
+        alert.status,
+        5,
+        "alert.status.invalid",
+        "Alert status is not a valid option in an alert message.",
+    ));
+    validations.push(validate_optional_enum(
+        alert.priority,
+        3,
+        "alert.priority.invalid",
+        "Alert priority is not a valid option in an alert message.",
+    ));
 
     if alert.region_id.is_some() {
         validations.push(validate_ulid(
@@ -203,6 +224,57 @@ mod alert_validation_tests {
                 "A valid ULID must be used for an alert ID in an alert message."
             ),
             validate_alert_id(Some(invalid_alert_id))
+        );
+    }
+
+    fn minimal_alert() -> Alert {
+        Alert {
+            alert_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            alert_type: None,
+            status: None,
+            description: None,
+            region_id: None,
+            priority: None,
+            ranking: None,
+            confidence: None,
+            associated_file: vec![],
+            associated_detection: vec![],
+            additional_information: None,
+            location_oneof: None,
+        }
+    }
+
+    #[test]
+    fn test_alert_type_status_and_priority_out_of_range_are_findings() {
+        assert_eq!(
+            ValidationOutcome::fail(
+                "alert.alert_type.invalid",
+                "Alert type is not a valid option in an alert message."
+            ),
+            validate_alert(Alert {
+                alert_type: Some(999),
+                ..minimal_alert()
+            })
+        );
+        assert_eq!(
+            ValidationOutcome::fail(
+                "alert.status.invalid",
+                "Alert status is not a valid option in an alert message."
+            ),
+            validate_alert(Alert {
+                status: Some(999),
+                ..minimal_alert()
+            })
+        );
+        assert_eq!(
+            ValidationOutcome::fail(
+                "alert.priority.invalid",
+                "Alert priority is not a valid option in an alert message."
+            ),
+            validate_alert(Alert {
+                priority: Some(999),
+                ..minimal_alert()
+            })
         );
     }
 }

@@ -9,7 +9,7 @@ use crate::finding::ValidationOutcome;
 use crate::validation::common::{
     validate_follow_object, validate_location_list,
     validate_location_or_range_bearing as validate_common_location_or_range_bearing,
-    validate_required_nonzero, validate_required_string, validate_ulid,
+    validate_required_enum, validate_required_string, validate_ulid,
 };
 
 /// Function to validation a SAPIENT task message
@@ -96,8 +96,10 @@ fn validate_command(command: Command) -> ValidationOutcome {
 }
 
 fn validate_region(region: Region) -> ValidationOutcome {
-    let region_type_validation = validate_required_nonzero(
+    // `RegionType` is mandatory and has no reserved gaps (0-5).
+    let region_type_validation = validate_required_enum(
         region.r#type,
+        5,
         "task.region.type.missing",
         "Region type must be specified in task message.",
     );
@@ -260,8 +262,10 @@ fn validate_parameter(parameter: Parameter, rule_id_prefix: &str) -> ValidationO
         return name_validation;
     }
 
-    let operator_validation = validate_required_nonzero(
+    // `Operator` is mandatory and has no reserved gaps (0-4).
+    let operator_validation = validate_required_enum(
         parameter.operator,
+        4,
         format!("{rule_id_prefix}.operator.missing"),
         "Parameter operator must be specified.",
     );
@@ -269,14 +273,17 @@ fn validate_parameter(parameter: Parameter, rule_id_prefix: &str) -> ValidationO
         return operator_validation;
     }
 
-    if parameter.value.is_none() {
-        return ValidationOutcome::fail(
+    match parameter.value {
+        None => ValidationOutcome::fail(
             format!("{rule_id_prefix}.value.missing"),
             "Parameter value must be specified.",
-        );
+        ),
+        Some(v) if !v.is_finite() => ValidationOutcome::fail(
+            format!("{rule_id_prefix}.value.invalid"),
+            "Parameter value must be a finite number.",
+        ),
+        Some(_) => ValidationOutcome::pass(),
     }
-
-    ValidationOutcome::pass()
 }
 
 /// Function to check a task ID as specified in the SAPIENT version 7 ICD
@@ -506,5 +513,111 @@ mod task_validation_tests {
                 validate_control(Some(control))
             );
         }
+    }
+
+    fn task_with_region(region: Region) -> Task {
+        Task {
+            task_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            task_name: None,
+            task_description: None,
+            task_start_time: None,
+            task_end_time: None,
+            control: Some(1),
+            region: vec![region],
+            command: None,
+        }
+    }
+
+    fn valid_region_area() -> LocationOrRangeBearing {
+        LocationOrRangeBearing {
+            fov_oneof: Some(FovOneof::LocationList(LocationList {
+                locations: vec![Location {
+                    x: Some(1.0),
+                    y: Some(2.0),
+                    z: None,
+                    x_error: None,
+                    y_error: None,
+                    z_error: None,
+                    coordinate_system: Some(1),
+                    datum: Some(1),
+                    utm_zone: None,
+                }],
+            })),
+        }
+    }
+
+    #[test]
+    fn test_region_type_out_of_range_is_a_finding() {
+        let region = Region {
+            r#type: Some(999),
+            region_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            region_name: Some("AOI".to_string()),
+            region_area: Some(valid_region_area()),
+            class_filter: vec![],
+            behaviour_filter: vec![],
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "task.region.type.missing",
+                "Region type must be specified in task message."
+            ),
+            validate_task(task_with_region(region))
+        );
+    }
+
+    #[test]
+    fn test_parameter_operator_out_of_range_is_a_finding() {
+        let region = Region {
+            r#type: Some(1),
+            region_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            region_name: Some("AOI".to_string()),
+            region_area: Some(valid_region_area()),
+            class_filter: vec![ClassFilter {
+                parameter: Some(Parameter {
+                    name: Some("confidence".to_string()),
+                    operator: Some(999),
+                    value: Some(0.5),
+                }),
+                r#type: Some("aircraft".to_string()),
+                sub_class_filter: vec![],
+                priority: None,
+            }],
+            behaviour_filter: vec![],
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "task.class_filter.parameter.operator.missing",
+                "Parameter operator must be specified."
+            ),
+            validate_task(task_with_region(region))
+        );
+    }
+
+    #[test]
+    fn test_parameter_value_non_finite_is_a_finding() {
+        let region = Region {
+            r#type: Some(1),
+            region_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            region_name: Some("AOI".to_string()),
+            region_area: Some(valid_region_area()),
+            class_filter: vec![ClassFilter {
+                parameter: Some(Parameter {
+                    name: Some("confidence".to_string()),
+                    operator: Some(1),
+                    value: Some(f32::NAN),
+                }),
+                r#type: Some("aircraft".to_string()),
+                sub_class_filter: vec![],
+                priority: None,
+            }],
+            behaviour_filter: vec![],
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "task.class_filter.parameter.value.invalid",
+                "Parameter value must be a finite number."
+            ),
+            validate_task(task_with_region(region))
+        );
     }
 }

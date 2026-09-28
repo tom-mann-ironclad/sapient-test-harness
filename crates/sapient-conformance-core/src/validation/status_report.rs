@@ -4,9 +4,9 @@ use crate::bsi_flex_335_v2_0::{
 };
 use crate::finding::ValidationOutcome;
 use crate::validation::common::{
-    validate_location,
+    validate_implicit_enum, validate_location,
     validate_location_or_range_bearing as validate_common_location_or_range_bearing,
-    validate_required_nonzero, validate_required_string, validate_ulid,
+    validate_required_enum, validate_required_string, validate_ulid,
 };
 
 /// Function to validation a SAPIENT status report message
@@ -142,8 +142,10 @@ fn validate_location_or_range_bearing(
 }
 
 fn validate_status(status: Status) -> ValidationOutcome {
-    let status_type_validation = validate_required_nonzero(
+    // `StatusType` is mandatory and has no reserved gaps (0-13).
+    let status_type_validation = validate_required_enum(
         status.status_type,
+        13,
         "status_report.status.status_type.missing",
         "Status type must be specified in status report.",
     );
@@ -169,9 +171,40 @@ fn validate_status_level(status_level: Option<i32>) -> ValidationOutcome {
     }
 }
 
+/// The local schema describes battery level as 0-100; `level` is optional,
+/// so absence passes. `source`/`status` are proto3 fields declared without
+/// `optional` (see `status_report.proto`'s `Power` message), so the wire
+/// format cannot tell "absent" from "explicitly 0/UNSPECIFIED" for either
+/// -- 0 must be accepted there, only a genuinely undefined discriminant is
+/// invalid.
 fn validate_power(power: Power) -> ValidationOutcome {
-    let _ = power;
-    ValidationOutcome::pass()
+    if let Some(level) = power.level
+        && !(0..=100).contains(&level)
+    {
+        return ValidationOutcome::fail(
+            "status_report.power.level.invalid",
+            "Power level must be between 0 and 100 in status report.",
+        );
+    }
+
+    // `PowerSource` has no reserved gaps (0-8).
+    let source_validation = validate_implicit_enum(
+        power.source,
+        8,
+        "status_report.power.source.invalid",
+        "Power source is not a valid option in status report.",
+    );
+    if !source_validation.passed {
+        return source_validation;
+    }
+
+    // `PowerStatus` has no reserved gaps (0-2).
+    validate_implicit_enum(
+        power.status,
+        2,
+        "status_report.power.status.invalid",
+        "Power status is not a valid option in status report.",
+    )
 }
 
 #[cfg(test)]
@@ -184,7 +217,7 @@ mod status_report_validation_tests {
         },
         finding::ValidationOutcome,
         validation::status_report::{
-            validate_info, validate_mode, validate_report_id, validate_status,
+            validate_info, validate_mode, validate_power, validate_report_id, validate_status,
             validate_status_report, validate_system,
         },
     };
@@ -430,6 +463,66 @@ mod status_report_validation_tests {
         assert_eq!(
             ValidationOutcome::pass(),
             validate_status_report(status_report)
+        );
+    }
+
+    #[test]
+    fn test_power_level_out_of_range_is_a_finding() {
+        assert_eq!(
+            ValidationOutcome::fail(
+                "status_report.power.level.invalid",
+                "Power level must be between 0 and 100 in status report."
+            ),
+            validate_power(Power {
+                level: Some(101),
+                source: 0,
+                status: 0,
+            })
+        );
+        assert_eq!(
+            ValidationOutcome::fail(
+                "status_report.power.level.invalid",
+                "Power level must be between 0 and 100 in status report."
+            ),
+            validate_power(Power {
+                level: Some(-1),
+                source: 0,
+                status: 0,
+            })
+        );
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_power(Power {
+                level: None,
+                source: 0,
+                status: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn test_power_undefined_source_or_status_is_a_finding() {
+        assert_eq!(
+            ValidationOutcome::fail(
+                "status_report.power.source.invalid",
+                "Power source is not a valid option in status report."
+            ),
+            validate_power(Power {
+                level: None,
+                source: 99,
+                status: 0,
+            })
+        );
+        assert_eq!(
+            ValidationOutcome::fail(
+                "status_report.power.status.invalid",
+                "Power status is not a valid option in status report."
+            ),
+            validate_power(Power {
+                level: None,
+                source: 0,
+                status: 99,
+            })
         );
     }
 }

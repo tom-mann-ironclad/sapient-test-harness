@@ -20,8 +20,8 @@ use crate::finding::ValidationOutcome;
 use crate::validation::common::{
     validate_location_coordinate_system,
     validate_location_or_range_bearing as validate_common_location_or_range_bearing,
-    validate_nonzero, validate_range_bearing_coordinate_system, validate_required_nonzero,
-    validate_required_string, validate_uuid_v4,
+    validate_nonzero, validate_optional_enum, validate_range_bearing_coordinate_system,
+    validate_required_enum, validate_required_string, validate_uuid_v4,
 };
 
 /// Function to validation a SAPIENT registration message
@@ -78,8 +78,10 @@ fn validate_node_definition(node_definitions: Vec<NodeDefinition>) -> Validation
         );
     }
     for node_definition in node_definitions {
-        let node_type_validation = validate_required_nonzero(
+        // `NodeType` is mandatory and has no reserved gaps (0-20).
+        let node_type_validation = validate_required_enum(
             node_definition.node_type,
+            20,
             "registration.node_definition.node_type.missing",
             "Node type must be specified in node defintition.",
         );
@@ -218,8 +220,10 @@ fn validate_status_interval(duration: Duration) -> ValidationOutcome {
 /// field embeds the `Duration`. See `src/finding.rs` for why this pass
 /// doesn't thread full per-field context through shared primitives.
 fn validate_duration_units(units: Option<i32>) -> ValidationOutcome {
-    validate_required_nonzero(
+    // `TimeUnits` is mandatory and has no reserved gaps (0-7).
+    validate_required_enum(
         units,
+        7,
         "registration.duration.units.missing",
         "Time Units must be specified.",
     )
@@ -227,19 +231,17 @@ fn validate_duration_units(units: Option<i32>) -> ValidationOutcome {
 
 /// Function to check the duration units as specified in the BSI Flex 335 V2.0
 fn validate_duration_value(value: Option<f32>) -> ValidationOutcome {
-    if value.is_none() {
-        return ValidationOutcome::fail(
+    match value {
+        None => ValidationOutcome::fail(
             "registration.duration.value.missing",
             "Duration value must be provided.",
-        );
-    }
-    if value < Some(0.0) {
-        return ValidationOutcome::fail(
+        ),
+        Some(v) if !v.is_finite() || v < 0.0 => ValidationOutcome::fail(
             "registration.duration.value.invalid",
-            "Duration value must be 0 or greater.",
-        );
+            "Duration value must be a finite number 0 or greater.",
+        ),
+        Some(_) => ValidationOutcome::pass(),
     }
-    ValidationOutcome::pass()
 }
 
 /// Function to check the mode definitions as specified in the BSI Flex 335 V2.0
@@ -506,9 +508,9 @@ fn validate_region_definition(region_definition: RegionDefinition) -> Validation
             "Region type must be specified in region definition.",
         );
     }
+    // `RegionType` has no reserved gaps (0-5).
     for region_type in region_definition.region_type {
-        let valid_region_type = region_type != 0;
-        if !valid_region_type {
+        if !(1..=5).contains(&region_type) {
             return ValidationOutcome::fail(
                 "registration.region_definition.region_type.invalid",
                 "Region type must be specified in region definition.",
@@ -557,8 +559,10 @@ fn validate_region_definition(region_definition: RegionDefinition) -> Validation
 
 /// Function to check the mode definition as specified in the BSI Flex 335 V2.0
 fn validate_mode_type(mode_type: Option<i32>) -> ValidationOutcome {
-    validate_required_nonzero(
+    // `ModeType` is mandatory and has no reserved gaps (0-3).
+    validate_required_enum(
         mode_type,
+        3,
         "registration.mode_definition.mode_type.missing",
         "Mode type must be specified.",
     )
@@ -567,8 +571,10 @@ fn validate_mode_type(mode_type: Option<i32>) -> ValidationOutcome {
 fn validate_status_report_definition(
     status_report: crate::bsi_flex_335_v2_0::registration::StatusReport,
 ) -> ValidationOutcome {
-    let category_validation = validate_required_nonzero(
+    // `StatusReportCategory` is mandatory and has no reserved gaps (0-4).
+    let category_validation = validate_required_enum(
         status_report.category,
+        4,
         "registration.status_definition.status_report.category.missing",
         "Status report category must be specified in registration.",
     );
@@ -661,11 +667,15 @@ fn validate_performance_value(performance_value: PerformanceValue) -> Validation
 fn validate_detection_report_definition(
     detection_report: crate::bsi_flex_335_v2_0::registration::DetectionReport,
 ) -> ValidationOutcome {
-    if detection_report.category.is_none() || detection_report.category == Some(0) {
-        return ValidationOutcome::fail(
-            "registration.detection_report.category.missing",
-            "Detection report category must be specified.",
-        );
+    // `DetectionReportCategory` is mandatory and has no reserved gaps (0-4).
+    let category_validation = validate_required_enum(
+        detection_report.category,
+        4,
+        "registration.detection_report.category.missing",
+        "Detection report category must be specified.",
+    );
+    if !category_validation.passed {
+        return category_validation;
     }
 
     match detection_report.r#type.as_deref() {
@@ -694,6 +704,17 @@ fn validate_detection_report_definition(
 fn validate_detection_class_definition(
     detection_class_definition: DetectionClassDefinition,
 ) -> ValidationOutcome {
+    // `ConfidenceDefinition` is optional and has no reserved gaps (0-2).
+    let confidence_definition_validation = validate_optional_enum(
+        detection_class_definition.confidence_definition,
+        2,
+        "registration.detection_class_definition.confidence_definition.invalid",
+        "Confidence definition is not a valid option in detection class definition.",
+    );
+    if !confidence_definition_validation.passed {
+        return confidence_definition_validation;
+    }
+
     for class_performance in detection_class_definition.class_performance {
         let validation = validate_performance_value(class_performance);
         if !validation.passed {
@@ -866,14 +887,13 @@ fn validate_command_definition(command: Command) -> ValidationOutcome {
         return completion_time_validation;
     }
 
-    if command.r#type.is_none() || command.r#type == Some(0) {
-        return ValidationOutcome::fail(
-            "registration.command.type.missing",
-            "Command type must be specified.",
-        );
-    }
-
-    ValidationOutcome::pass()
+    // `CommandType` is mandatory and has no reserved gaps (0-9).
+    validate_required_enum(
+        command.r#type,
+        9,
+        "registration.command.type.missing",
+        "Command type must be specified.",
+    )
 }
 
 fn validate_class_filter_definition(
@@ -954,7 +974,13 @@ fn validate_filter_parameter(filter_parameter: FilterParameter) -> ValidationOut
         Some(_) => {}
     }
 
-    if filter_parameter.operators.is_empty() || filter_parameter.operators.contains(&0) {
+    // `Operator` has no reserved gaps (0-4).
+    if filter_parameter.operators.is_empty()
+        || filter_parameter
+            .operators
+            .iter()
+            .any(|operator| !(1..=4).contains(operator))
+    {
         return ValidationOutcome::fail(
             "registration.filter_parameter.operators.invalid",
             "Filter parameter operators must be specified.",
@@ -1283,6 +1309,20 @@ mod registration_validation_tests {
             ),
             validate_node_definition(vec![])
         );
+
+        // undefined discriminant -- not just nonzero, must be one of the
+        // v2.0-defined NodeType values.
+        let undefined_node_type = NodeDefinition {
+            node_type: Some(999),
+            node_sub_type: vec![],
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "registration.node_definition.node_type.missing",
+                "Node type must be specified in node defintition."
+            ),
+            validate_node_definition(vec![undefined_node_type])
+        );
     }
 
     /// Unit test to check that ICD versions are correctly validated
@@ -1358,7 +1398,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.duration.value.invalid",
-                "Duration value must be 0 or greater."
+                "Duration value must be a finite number 0 or greater."
             ),
             validate_status_definition(missing_value_status_definition)
         );
@@ -1437,7 +1477,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.duration.value.invalid",
-                "Duration value must be 0 or greater."
+                "Duration value must be a finite number 0 or greater."
             ),
             validate_duration_value(Some(-1.0))
         );
@@ -1754,7 +1794,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.duration.value.invalid",
-                "Duration value must be 0 or greater."
+                "Duration value must be a finite number 0 or greater."
             ),
             validate_settle_time(missing_value_duration)
         );

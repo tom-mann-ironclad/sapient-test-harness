@@ -45,12 +45,22 @@ pub fn validate_uuid_v4(
     let parsed = Uuid::parse_str(value);
 
     match parsed {
-        Ok(uuid) if uuid.get_version_num() == 4 && uuid.hyphenated().to_string() == value => {
+        Ok(uuid)
+            if uuid.get_version_num() == 4
+                && uuid.get_variant() == uuid::Variant::RFC4122
+                && uuid.hyphenated().to_string() == value =>
+        {
             ValidationOutcome::pass()
         }
         _ => ValidationOutcome::fail(rule_id, error_message),
     }
 }
+
+/// Earliest `seconds` a protobuf `Timestamp` can represent: `0001-01-01T00:00:00Z`,
+/// per the well-known type's own documented range.
+const MIN_TIMESTAMP_SECONDS: i64 = -62_135_596_800;
+/// Latest `seconds` a protobuf `Timestamp` can represent: `9999-12-31T23:59:59Z`.
+const MAX_TIMESTAMP_SECONDS: i64 = 253_402_300_799;
 
 pub fn validate_timestamp(
     timestamp: Option<Timestamp>,
@@ -64,7 +74,9 @@ pub fn validate_timestamp(
         None => return ValidationOutcome::fail(missing_rule_id, missing_error_message),
     };
 
-    if !(0..1_000_000_000).contains(&timestamp.nanos) {
+    if !(0..1_000_000_000).contains(&timestamp.nanos)
+        || !(MIN_TIMESTAMP_SECONDS..=MAX_TIMESTAMP_SECONDS).contains(&timestamp.seconds)
+    {
         return ValidationOutcome::fail(malformed_rule_id, malformed_error_message);
     }
 
@@ -116,6 +128,122 @@ pub fn validate_nonzero(
     }
 }
 
+/// Membership check for a mandatory enum field whose v2.0-defined
+/// discriminants are exactly the contiguous range `1..=max` (0 is
+/// `..._UNSPECIFIED` and, like absence, invalid for a mandatory field).
+/// Prefer this over [`validate_required_nonzero`] for any protocol enum --
+/// nonzero alone lets an undefined positive discriminant (e.g. `999`) pass,
+/// and protobuf's wire format does not drop or reject those: unknown
+/// enumeration values decode and survive as their raw `i32` untouched.
+/// Only use this where the enum's defined values really are gap-free --
+/// an enum with a `reserved` (retired) value in the middle of its range
+/// needs its own explicit membership list instead (see
+/// [`validate_location_coordinate_system`] for an example).
+pub fn validate_required_enum(
+    value: Option<i32>,
+    max: i32,
+    rule_id: impl Into<String>,
+    error_message: &str,
+) -> ValidationOutcome {
+    match value {
+        Some(v) if (1..=max).contains(&v) => ValidationOutcome::pass(),
+        _ => ValidationOutcome::fail(rule_id, error_message),
+    }
+}
+
+/// As [`validate_required_enum`], for an optional field: absence passes,
+/// and an explicit `0`/`..._UNSPECIFIED` is invalid exactly like any other
+/// undefined discriminant, since a present-but-unspecified value on a
+/// field that could simply have been omitted carries no information.
+pub fn validate_optional_enum(
+    value: Option<i32>,
+    max: i32,
+    rule_id: impl Into<String>,
+    error_message: &str,
+) -> ValidationOutcome {
+    match value {
+        None => ValidationOutcome::pass(),
+        Some(v) if (1..=max).contains(&v) => ValidationOutcome::pass(),
+        Some(_) => ValidationOutcome::fail(rule_id, error_message),
+    }
+}
+
+/// As [`validate_required_enum`], for a proto3 field declared *without*
+/// the `optional` keyword (so prost represents it as a plain `i32`, not
+/// `Option<i32>`): the wire format cannot distinguish "absent" from
+/// "explicitly 0/`..._UNSPECIFIED`" for such a field, so 0 must be
+/// accepted as legitimate here -- only a genuinely undefined discriminant
+/// is invalid.
+pub fn validate_implicit_enum(
+    value: i32,
+    max: i32,
+    rule_id: impl Into<String>,
+    error_message: &str,
+) -> ValidationOutcome {
+    match value {
+        0 => ValidationOutcome::pass(),
+        v if (1..=max).contains(&v) => ValidationOutcome::pass(),
+        _ => ValidationOutcome::fail(rule_id, error_message),
+    }
+}
+
+/// The protocol mixes `float` (`f32`) and `double` (`f64`) fields (compare
+/// `Duration.value` to `Location.x`); this lets [`validate_finite`]/
+/// [`validate_finite_non_negative`] serve both without duplicating them.
+pub trait FloatField: Copy + PartialOrd {
+    const FIELD_ZERO: Self;
+    fn is_finite_value(self) -> bool;
+}
+
+impl FloatField for f32 {
+    const FIELD_ZERO: Self = 0.0;
+    fn is_finite_value(self) -> bool {
+        self.is_finite()
+    }
+}
+
+impl FloatField for f64 {
+    const FIELD_ZERO: Self = 0.0;
+    fn is_finite_value(self) -> bool {
+        self.is_finite()
+    }
+}
+
+/// Reject `NaN`/`+-infinity` for a floating-point field, when present.
+/// Absence is not this function's concern -- callers check presence
+/// separately wherever a field is mandatory. No range beyond finiteness is
+/// enforced here: fields whose valid range depends on an external
+/// convention (e.g. degrees vs. radians for an angle) are deliberately
+/// left alone rather than have this harness invent a policy the schema
+/// itself never states.
+pub fn validate_finite<T: FloatField>(
+    value: Option<T>,
+    rule_id: impl Into<String>,
+    error_message: &str,
+) -> ValidationOutcome {
+    match value {
+        Some(v) if !v.is_finite_value() => ValidationOutcome::fail(rule_id, error_message),
+        _ => ValidationOutcome::pass(),
+    }
+}
+
+/// As [`validate_finite`], and additionally rejects negative values -- for
+/// quantities (distance, frequency, amplitude) that are never negative
+/// under any unit or coordinate convention, unlike an angle or a signed
+/// coordinate.
+pub fn validate_finite_non_negative<T: FloatField>(
+    value: Option<T>,
+    rule_id: impl Into<String>,
+    error_message: &str,
+) -> ValidationOutcome {
+    match value {
+        Some(v) if !v.is_finite_value() || v < T::FIELD_ZERO => {
+            ValidationOutcome::fail(rule_id, error_message)
+        }
+        _ => ValidationOutcome::pass(),
+    }
+}
+
 /// `LocationCoordinateSystem` values 3 and 4 are `reserved` in
 /// `location.proto` (used up to SAPIENT v7, dropped for non-SI units) --
 /// they're still valid `int32`s on the wire, so a plain nonzero check
@@ -163,10 +291,21 @@ pub fn validate_associated_detection(
         return node_id_validation;
     }
 
-    validate_ulid(
+    let object_id_validation = validate_ulid(
         associated_detection.object_id.as_deref(),
         format!("{rule_id_prefix}.object_id.invalid"),
         object_id_error,
+    );
+    if !object_id_validation.passed {
+        return object_id_validation;
+    }
+
+    // `AssociationRelation` is optional and has no reserved gaps (0-4).
+    validate_optional_enum(
+        associated_detection.association_type,
+        4,
+        format!("{rule_id_prefix}.association_type.invalid"),
+        "Association type is not a valid option in associated detection.",
     )
 }
 
@@ -212,6 +351,24 @@ pub fn validate_location(location: Location, rule_id_prefix: &str) -> Validation
         );
     }
 
+    for (value, field) in [
+        (location.x, "x"),
+        (location.y, "y"),
+        (location.z, "z"),
+        (location.x_error, "x_error"),
+        (location.y_error, "y_error"),
+        (location.z_error, "z_error"),
+    ] {
+        let finite_validation = validate_finite(
+            value,
+            format!("{rule_id_prefix}.{field}.invalid"),
+            "Coordinate must be a finite number in location.",
+        );
+        if !finite_validation.passed {
+            return finite_validation;
+        }
+    }
+
     let coordinate_system_validation = validate_location_coordinate_system(
         location.coordinate_system,
         format!("{rule_id_prefix}.coordinate_system.invalid"),
@@ -221,8 +378,10 @@ pub fn validate_location(location: Location, rule_id_prefix: &str) -> Validation
         return coordinate_system_validation;
     }
 
-    validate_required_nonzero(
+    // `LocationDatum` is mandatory and has no reserved gaps (0-2).
+    validate_required_enum(
         location.datum,
+        2,
         format!("{rule_id_prefix}.datum.missing"),
         "Datum must be specified in location.",
     )
@@ -232,6 +391,35 @@ pub fn validate_range_bearing(
     range_bearing: RangeBearing,
     rule_id_prefix: &str,
 ) -> ValidationOutcome {
+    for (value, field) in [
+        (range_bearing.elevation, "elevation"),
+        (range_bearing.azimuth, "azimuth"),
+        (range_bearing.elevation_error, "elevation_error"),
+        (range_bearing.azimuth_error, "azimuth_error"),
+    ] {
+        let finite_validation = validate_finite(
+            value,
+            format!("{rule_id_prefix}.{field}.invalid"),
+            "Value must be a finite number in range bearing.",
+        );
+        if !finite_validation.passed {
+            return finite_validation;
+        }
+    }
+    for (value, field) in [
+        (range_bearing.range, "range"),
+        (range_bearing.range_error, "range_error"),
+    ] {
+        let range_validation = validate_finite_non_negative(
+            value,
+            format!("{rule_id_prefix}.{field}.invalid"),
+            "Range must be a finite number 0 or greater in range bearing.",
+        );
+        if !range_validation.passed {
+            return range_validation;
+        }
+    }
+
     let coordinate_system_validation = validate_range_bearing_coordinate_system(
         range_bearing.coordinate_system,
         format!("{rule_id_prefix}.coordinate_system.invalid"),
@@ -241,8 +429,10 @@ pub fn validate_range_bearing(
         return coordinate_system_validation;
     }
 
-    validate_required_nonzero(
+    // `RangeBearingDatum` is mandatory and has no reserved gaps (0-4).
+    validate_required_enum(
         range_bearing.datum,
+        4,
         format!("{rule_id_prefix}.datum.missing"),
         "Datum must be specified in range bearing.",
     )
@@ -252,6 +442,42 @@ pub fn validate_range_bearing_cone(
     range_bearing: RangeBearingCone,
     rule_id_prefix: &str,
 ) -> ValidationOutcome {
+    for (value, field) in [
+        (range_bearing.elevation, "elevation"),
+        (range_bearing.azimuth, "azimuth"),
+        (range_bearing.elevation_error, "elevation_error"),
+        (range_bearing.azimuth_error, "azimuth_error"),
+        (range_bearing.horizontal_extent, "horizontal_extent"),
+        (range_bearing.vertical_extent, "vertical_extent"),
+        (
+            range_bearing.horizontal_extent_error,
+            "horizontal_extent_error",
+        ),
+        (range_bearing.vertical_extent_error, "vertical_extent_error"),
+    ] {
+        let finite_validation = validate_finite(
+            value,
+            format!("{rule_id_prefix}.{field}.invalid"),
+            "Value must be a finite number in range bearing.",
+        );
+        if !finite_validation.passed {
+            return finite_validation;
+        }
+    }
+    for (value, field) in [
+        (range_bearing.range, "range"),
+        (range_bearing.range_error, "range_error"),
+    ] {
+        let range_validation = validate_finite_non_negative(
+            value,
+            format!("{rule_id_prefix}.{field}.invalid"),
+            "Range must be a finite number 0 or greater in range bearing.",
+        );
+        if !range_validation.passed {
+            return range_validation;
+        }
+    }
+
     let coordinate_system_validation = validate_range_bearing_coordinate_system(
         range_bearing.coordinate_system,
         format!("{rule_id_prefix}.coordinate_system.invalid"),
@@ -261,8 +487,10 @@ pub fn validate_range_bearing_cone(
         return coordinate_system_validation;
     }
 
-    validate_required_nonzero(
+    // `RangeBearingDatum` is mandatory and has no reserved gaps (0-4).
+    validate_required_enum(
         range_bearing.datum,
+        4,
         format!("{rule_id_prefix}.datum.missing"),
         "Datum must be specified in range bearing.",
     )
@@ -323,11 +551,13 @@ mod common_validation_tests {
     use crate::finding::ValidationOutcome;
 
     use super::{
-        validate_associated_detection, validate_associated_file, validate_follow_object,
+        validate_associated_detection, validate_associated_file, validate_finite,
+        validate_finite_non_negative, validate_follow_object, validate_implicit_enum,
         validate_location, validate_location_list, validate_location_or_range_bearing,
-        validate_nonzero, validate_range_bearing, validate_range_bearing_cone,
-        validate_required_nonzero, validate_required_string, validate_timestamp, validate_ulid,
-        validate_unit_interval, validate_uuid_v4,
+        validate_nonzero, validate_optional_enum, validate_range_bearing,
+        validate_range_bearing_cone, validate_required_enum, validate_required_nonzero,
+        validate_required_string, validate_timestamp, validate_ulid, validate_unit_interval,
+        validate_uuid_v4,
     };
 
     #[test]
@@ -751,6 +981,225 @@ mod common_validation_tests {
         assert_eq!(
             ValidationOutcome::pass(),
             validate_follow_object(follow_object)
+        );
+    }
+
+    #[test]
+    fn test_validate_finite() {
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_finite(Some(1.0_f32), "test.finite", "not finite")
+        );
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_finite(None::<f32>, "test.finite", "not finite")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.finite", "not finite"),
+            validate_finite(Some(f32::NAN), "test.finite", "not finite")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.finite", "not finite"),
+            validate_finite(Some(f32::INFINITY), "test.finite", "not finite")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.finite", "not finite"),
+            validate_finite(Some(f64::NEG_INFINITY), "test.finite", "not finite")
+        );
+    }
+
+    #[test]
+    fn test_validate_finite_non_negative() {
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_finite_non_negative(Some(0.0_f32), "test.range", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.range", "invalid"),
+            validate_finite_non_negative(Some(-0.1_f32), "test.range", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.range", "invalid"),
+            validate_finite_non_negative(Some(f32::NAN), "test.range", "invalid")
+        );
+    }
+
+    #[test]
+    fn test_validate_required_enum() {
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_required_enum(Some(1), 4, "test.enum", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.enum", "invalid"),
+            validate_required_enum(Some(0), 4, "test.enum", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.enum", "invalid"),
+            validate_required_enum(Some(999), 4, "test.enum", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.enum", "invalid"),
+            validate_required_enum(None, 4, "test.enum", "invalid")
+        );
+    }
+
+    #[test]
+    fn test_validate_optional_enum() {
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_optional_enum(None, 4, "test.enum", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_optional_enum(Some(1), 4, "test.enum", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.enum", "invalid"),
+            validate_optional_enum(Some(0), 4, "test.enum", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.enum", "invalid"),
+            validate_optional_enum(Some(999), 4, "test.enum", "invalid")
+        );
+    }
+
+    #[test]
+    fn test_validate_implicit_enum() {
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_implicit_enum(0, 4, "test.enum", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_implicit_enum(1, 4, "test.enum", "invalid")
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.enum", "invalid"),
+            validate_implicit_enum(999, 4, "test.enum", "invalid")
+        );
+    }
+
+    #[test]
+    fn test_validate_uuid_v4_rejects_non_rfc4122_variant() {
+        // Version-4 nibble and canonical formatting, but the variant bits
+        // (0x0 in the leading nibble of the clock-seq byte) do not identify
+        // an RFC 4122 UUID -- only 0x8-0xb do.
+        assert_eq!(
+            ValidationOutcome::fail("test.uuid", "invalid uuid"),
+            validate_uuid_v4(
+                Some("550e8400-e29b-41d4-0716-446655440000"),
+                "test.uuid",
+                "invalid uuid"
+            )
+        );
+    }
+
+    #[test]
+    fn test_validate_timestamp_rejects_out_of_range_seconds() {
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_timestamp(
+                Some(prost_types::Timestamp {
+                    seconds: 253_402_300_799,
+                    nanos: 0,
+                }),
+                "test.timestamp.missing",
+                "missing timestamp",
+                "test.timestamp.malformed",
+                "bad timestamp"
+            )
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.timestamp.malformed", "bad timestamp"),
+            validate_timestamp(
+                Some(prost_types::Timestamp {
+                    seconds: i64::MAX,
+                    nanos: 0,
+                }),
+                "test.timestamp.missing",
+                "missing timestamp",
+                "test.timestamp.malformed",
+                "bad timestamp"
+            )
+        );
+        assert_eq!(
+            ValidationOutcome::fail("test.timestamp.malformed", "bad timestamp"),
+            validate_timestamp(
+                Some(prost_types::Timestamp {
+                    seconds: i64::MIN,
+                    nanos: 0,
+                }),
+                "test.timestamp.missing",
+                "missing timestamp",
+                "test.timestamp.malformed",
+                "bad timestamp"
+            )
+        );
+    }
+
+    #[test]
+    fn test_validate_location_rejects_non_finite_coordinates() {
+        let location = Location {
+            x: Some(f64::NAN),
+            y: Some(2.0),
+            z: None,
+            x_error: None,
+            y_error: None,
+            z_error: None,
+            coordinate_system: Some(1),
+            datum: Some(1),
+            utm_zone: None,
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "test.location.x.invalid",
+                "Coordinate must be a finite number in location."
+            ),
+            validate_location(location, "test.location")
+        );
+    }
+
+    #[test]
+    fn test_validate_range_bearing_rejects_negative_range() {
+        let range_bearing = RangeBearing {
+            elevation: Some(1.0),
+            azimuth: Some(2.0),
+            range: Some(-1.0),
+            elevation_error: None,
+            azimuth_error: None,
+            range_error: None,
+            coordinate_system: Some(1),
+            datum: Some(1),
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "test.range_bearing.range.invalid",
+                "Range must be a finite number 0 or greater in range bearing."
+            ),
+            validate_range_bearing(range_bearing, "test.range_bearing")
+        );
+    }
+
+    #[test]
+    fn test_validate_associated_detection_rejects_invalid_association_type() {
+        let associated_detection = AssociatedDetection {
+            timestamp: None,
+            node_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+            object_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+            association_type: Some(999),
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "test.associated_detection.association_type.invalid",
+                "Association type is not a valid option in associated detection."
+            ),
+            validate_associated_detection(
+                associated_detection,
+                "test.associated_detection",
+                "bad node id",
+                "bad object id"
+            )
         );
     }
 }
