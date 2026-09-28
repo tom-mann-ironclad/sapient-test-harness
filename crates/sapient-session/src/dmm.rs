@@ -58,6 +58,13 @@ where
         }
     }
 
+    /// Override [`crate::state::DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS`] for
+    /// this connection's session.
+    pub fn with_allowed_status_report_intervals(mut self, intervals: u32) -> Self {
+        self.session = self.session.with_allowed_status_report_intervals(intervals);
+        self
+    }
+
     /// Consume progress from the most recently processed inbound message.
     /// Call after `poll_once` returns `Ok(true)`, before polling another frame.
     /// Returns an event at most once; `None` is not a conformance verdict.

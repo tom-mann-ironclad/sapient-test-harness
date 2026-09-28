@@ -133,6 +133,10 @@ pub struct RegisteredContract {
     /// used for the retroactive interval check -- not wall-clock receipt
     /// time, so this is deterministic and testable without real delays.
     pub last_status_report_timestamp: Option<Timestamp>,
+    /// The peer-declared timestamp of the `Registration` that established
+    /// this contract, used as the baseline for the first StatusReport's
+    /// allowed-interval check. Reset on every re-registration.
+    pub registered_at: Option<Timestamp>,
     /// IDs still awaiting a terminal result, including accepted tasks.
     pub outstanding_task_ids: HashSet<String>,
     /// Outstanding tasks, keyed by correlation ID and removed on terminal acknowledgement.
@@ -162,7 +166,20 @@ pub struct DmmSession {
     /// Single-message progress slot, reset before decoding each inbound frame.
     /// Findings have separate retention; this slot is not an event queue.
     event: Option<DmmEvent>,
+    /// See [`DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS`].
+    allowed_status_report_intervals: u32,
 }
+
+/// How many multiples of the declared `status_interval` a StatusReport gap
+/// is allowed to span before it's treated as a problem. This is a
+/// status-reporting cadence property, not a registration one -- it matters
+/// here specifically because the *first* StatusReport after a
+/// (re-)Registration has no previous report to measure a single-interval
+/// gap against, and Registration itself can land at any phase of the ASM's
+/// reporting rhythm, so a single interval is not a valid deadline for that
+/// first report. Real DMMs commonly allow a small number of intervals
+/// instead; 3 is a typical default that most deployments never need to change.
+pub const DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS: u32 = 3;
 
 impl DmmSession {
     pub fn new(harness_node_id: impl Into<String>) -> Self {
@@ -172,7 +189,14 @@ impl DmmSession {
             findings: Vec::new(),
             current_raw: Vec::new(),
             event: None,
+            allowed_status_report_intervals: DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS,
         }
+    }
+
+    /// Override [`DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS`] for this session.
+    pub fn with_allowed_status_report_intervals(mut self, intervals: u32) -> Self {
+        self.allowed_status_report_intervals = intervals;
+        self
     }
 
     /// Consume progress from the most recent `on_bytes` call, at most once.
@@ -245,7 +269,7 @@ impl DmmSession {
 
         match content {
             Some(Content::Registration(registration)) => {
-                self.handle_registration(peer_node_id, registration)
+                self.handle_registration(peer_node_id, peer_timestamp, registration)
             }
             Some(Content::StatusReport(status_report)) => {
                 self.handle_status_report(peer_timestamp, status_report)
@@ -272,6 +296,7 @@ impl DmmSession {
     fn handle_registration(
         &mut self,
         peer_node_id: Option<String>,
+        peer_timestamp: Option<Timestamp>,
         registration: Registration,
     ) -> Option<SapientMessage> {
         let outcome = validate_registration(registration.clone());
@@ -375,6 +400,7 @@ impl DmmSession {
             active_mode,
             mode_transition: None,
             last_status_report_timestamp: None,
+            registered_at: peer_timestamp,
             outstanding_task_ids: HashSet::new(),
             tasks: HashMap::new(),
             outstanding_alert_ids: HashSet::new(),
@@ -436,29 +462,76 @@ impl DmmSession {
             });
         }
 
-        // Retroactive interval check: compare this report's declared
-        // timestamp against the last one, against the interval fixed at
-        // Registration time.
-        if let (Some(previous), Some(current)) =
-            (contract.last_status_report_timestamp, peer_timestamp)
+        // Retroactive timing check. The declared `status_interval` only
+        // commits the ASM to a sending *rhythm*, not to a deadline measured
+        // from Registration -- Registration can land at any phase of that
+        // rhythm, so the first report after it is checked against
+        // `allowed_status_report_intervals` declared intervals of tolerance
+        // instead of the single-interval bound used between subsequent
+        // reports. Either way, a report timestamped *before* its baseline is
+        // a clock reversal, not lateness, and is reported distinctly --
+        // clock sync between DMM and ASM isn't something the protocol
+        // guarantees, but an ASM's own successive self-reported timestamps
+        // going backwards is a real problem independent of that, since it
+        // only requires the ASM's own clock to be monotonic.
+        if let Some(current) = peer_timestamp
             && let Some(declared_seconds) = contract
                 .registration
                 .status_definition
                 .as_ref()
                 .and_then(|definition| definition.status_interval.as_ref())
                 .and_then(duration_to_seconds)
-            && let Some(elapsed_seconds) = timestamp_diff_seconds(&previous, &current)
-            && elapsed_seconds > declared_seconds
         {
-            self.findings.push(Finding {
-                rule_id: "session.status_report.interval_exceeded".to_string(),
-                field_path: "registration.status_definition.status_interval".to_string(),
-                severity: Severity::Error,
-                message: format!(
-                    "StatusReport arrived {elapsed_seconds:.3}s after the previous one, \
-                     exceeding the declared interval of {declared_seconds:.3}s."
-                ),
-            });
+            match contract.last_status_report_timestamp {
+                Some(previous) => {
+                    if let Some(elapsed_seconds) = timestamp_diff_seconds(&previous, &current) {
+                        if elapsed_seconds < 0.0 {
+                            self.findings.push(timestamp_reversed_finding(
+                                "the previous StatusReport",
+                                -elapsed_seconds,
+                            ));
+                        } else if elapsed_seconds > declared_seconds {
+                            self.findings.push(Finding {
+                                rule_id: "session.status_report.interval_exceeded".to_string(),
+                                field_path: "registration.status_definition.status_interval"
+                                    .to_string(),
+                                severity: Severity::Error,
+                                message: format!(
+                                    "StatusReport arrived {elapsed_seconds:.3}s after the \
+                                     previous one, exceeding the declared interval of \
+                                     {declared_seconds:.3}s."
+                                ),
+                            });
+                        }
+                    }
+                }
+                None => {
+                    if let Some(registered_at) = contract.registered_at
+                        && let Some(elapsed_seconds) =
+                            timestamp_diff_seconds(&registered_at, &current)
+                    {
+                        let allowed_seconds =
+                            declared_seconds * f64::from(self.allowed_status_report_intervals);
+                        if elapsed_seconds < 0.0 {
+                            self.findings
+                                .push(timestamp_reversed_finding("Registration", -elapsed_seconds));
+                        } else if elapsed_seconds > allowed_seconds {
+                            self.findings.push(Finding {
+                                rule_id: "session.status_report.first_report_late".to_string(),
+                                field_path: "registration.status_definition.status_interval"
+                                    .to_string(),
+                                severity: Severity::Error,
+                                message: format!(
+                                    "First StatusReport arrived {elapsed_seconds:.3}s after \
+                                     Registration, exceeding the allowed {} declared intervals \
+                                     ({allowed_seconds:.3}s of {declared_seconds:.3}s each).",
+                                    self.allowed_status_report_intervals
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
         }
 
         contract.last_status_report_timestamp = peer_timestamp;
@@ -899,14 +972,29 @@ fn protocol_duration(
     Duration::try_from_secs_f64(duration_to_seconds(value)?).ok()
 }
 
+/// Signed elapsed seconds from `earlier` to `later`; negative means `later`
+/// is actually before `earlier`. Callers decide what a negative value means
+/// -- unlike [`timestamp_elapsed`], this does not clamp to zero, since doing
+/// so would silently conceal a peer's clock going backwards.
 fn timestamp_diff_seconds(earlier: &Timestamp, later: &Timestamp) -> Option<f64> {
     let earlier_nanos = earlier.seconds as f64 * 1e9 + earlier.nanos as f64;
     let later_nanos = later.seconds as f64 * 1e9 + later.nanos as f64;
     let diff = (later_nanos - earlier_nanos) / 1e9;
-    if diff.is_finite() {
-        Some(diff.max(0.0))
-    } else {
-        None
+    diff.is_finite().then_some(diff)
+}
+
+/// A StatusReport's timestamp landed before `context`'s -- the ASM's own
+/// reported clock went backwards. `seconds_before` is the (positive)
+/// magnitude of the reversal.
+fn timestamp_reversed_finding(context: &str, seconds_before: f64) -> Finding {
+    Finding {
+        rule_id: "session.status_report.timestamp_reversed".to_string(),
+        field_path: "sapient_message.timestamp".to_string(),
+        severity: Severity::Error,
+        message: format!(
+            "StatusReport's timestamp is {seconds_before:.3}s before {context}'s timestamp; \
+             the ASM's reported time must not go backwards."
+        ),
     }
 }
 

@@ -16,6 +16,7 @@ use sapient_conformance_core::bsi_flex_335_v2_0::{
     task::{Command, command::Command as TaskCommandKind},
     task_ack::TaskStatus,
 };
+use sapient_session::state::DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS;
 use sapient_session::{DmmEvent, DmmSession, SessionState};
 
 mod common;
@@ -283,6 +284,127 @@ fn status_report_exceeding_interval_is_a_finding() {
             .any(|f| f.rule_id == "session.status_report.interval_exceeded"),
         "expected an interval_exceeded finding, got {findings:?}"
     );
+}
+
+#[test]
+fn first_status_report_within_allowed_intervals_produces_no_finding() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    register(&mut session);
+
+    // Later than one interval, but well within the default 3-interval
+    // allowance -- Registration can land at any phase of the ASM's
+    // reporting rhythm, so this must not be treated as late.
+    session.on_bytes(&encode(status_report_at(
+        2 * STATUS_INTERVAL_SECONDS as i64,
+        DEFAULT_MODE,
+    )));
+
+    assert!(session.findings().is_empty());
+}
+
+#[test]
+fn first_status_report_exceeding_allowed_intervals_is_a_finding() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    register(&mut session);
+
+    session.on_bytes(&encode(status_report_at(
+        DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS as i64 * STATUS_INTERVAL_SECONDS as i64 + 1,
+        DEFAULT_MODE,
+    )));
+
+    let findings = session.findings();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule_id == "session.status_report.first_report_late"),
+        "expected a first_report_late finding, got {findings:?}"
+    );
+}
+
+#[test]
+fn custom_allowed_status_report_intervals_is_respected() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID).with_allowed_status_report_intervals(1);
+    register(&mut session);
+
+    // Comfortably inside the default 3-interval allowance, but past a
+    // 1-interval one.
+    session.on_bytes(&encode(status_report_at(
+        2 * STATUS_INTERVAL_SECONDS as i64,
+        DEFAULT_MODE,
+    )));
+
+    let findings = session.findings();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule_id == "session.status_report.first_report_late"),
+        "expected a first_report_late finding under a 1-interval allowance, got {findings:?}"
+    );
+}
+
+#[test]
+fn first_status_report_before_registration_is_reversed_not_late() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    register(&mut session); // registered at t=0
+
+    session.on_bytes(&encode(status_report_at(-1, DEFAULT_MODE)));
+
+    let findings = session.findings();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule_id == "session.status_report.timestamp_reversed"),
+        "expected a timestamp_reversed finding, got {findings:?}"
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.rule_id == "session.status_report.first_report_late"),
+        "a reversed timestamp should not also be reported as late, got {findings:?}"
+    );
+}
+
+#[test]
+fn status_report_timestamp_reversed_between_reports_is_a_finding() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    register(&mut session);
+
+    session.on_bytes(&encode(status_report_at(10, DEFAULT_MODE)));
+    session.on_bytes(&encode(status_report_at(5, DEFAULT_MODE)));
+
+    let findings = session.findings();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule_id == "session.status_report.timestamp_reversed"),
+        "expected a timestamp_reversed finding, got {findings:?}"
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.rule_id == "session.status_report.interval_exceeded"),
+        "a reversed timestamp should not also be reported as interval_exceeded, got {findings:?}"
+    );
+}
+
+#[test]
+fn reregistration_resets_the_allowed_status_report_interval_baseline() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    register(&mut session); // registered at t=0
+
+    // Re-register much later; relative to the *first* registration this
+    // would already be well past the allowed intervals, but the baseline
+    // must reset to the new Registration's own timestamp.
+    session.on_bytes(&encode(envelope(
+        ASM_NODE_ID,
+        HARNESS_NODE_ID,
+        100,
+        Content::Registration(valid_registration()),
+    )));
+
+    session.on_bytes(&encode(status_report_at(101, DEFAULT_MODE)));
+
+    assert!(session.findings().is_empty());
 }
 
 #[test]

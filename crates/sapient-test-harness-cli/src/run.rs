@@ -44,6 +44,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
                 connect_timeout,
                 max_runtime,
                 args.max_frame_bytes,
+                args.allowed_status_report_intervals,
             )
             .await
         }
@@ -95,6 +96,7 @@ async fn run_as_dmm(
     connect_timeout: Duration,
     max_runtime: Duration,
     max_frame_bytes: u32,
+    allowed_status_report_intervals: u32,
 ) -> io::Result<(Vec<Finding>, ScenarioResult)> {
     let target: SocketAddr = target.parse().map_err(|_| {
         io::Error::new(
@@ -125,7 +127,8 @@ async fn run_as_dmm(
         writer,
         FrameReader::new(max_frame_bytes)
             .with_large_message_warning(crate::cli::warn_large_message),
-    );
+    )
+    .with_allowed_status_report_intervals(allowed_status_report_intervals);
     let Some(deadline) = Instant::now().checked_add(max_runtime) else {
         let mut scenario = ScenarioResult::for_role(Role::Dmm);
         scenario.record_error(

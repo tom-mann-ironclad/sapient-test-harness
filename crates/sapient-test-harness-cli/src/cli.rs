@@ -132,6 +132,19 @@ pub struct RunArgs {
     /// to a freshly generated random UUID.
     #[arg(long)]
     pub node_id: Option<String>,
+
+    /// For `--role dmm`: how many multiples of the declared
+    /// `status_interval` a StatusReport gap may span before it's treated
+    /// as a problem, applied to the first StatusReport after Registration
+    /// (which has no previous report to measure a single-interval gap
+    /// against, and Registration itself can land at any phase of the
+    /// ASM's reporting rhythm, so a single interval is not a valid
+    /// deadline there). Ignored for `--role asm`.
+    #[arg(
+        long,
+        default_value_t = sapient_session::state::DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS
+    )]
+    pub allowed_status_report_intervals: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize)]
