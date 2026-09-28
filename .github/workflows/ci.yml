@@ -8,19 +8,29 @@ on:
     # Catch newly-published advisories against an otherwise-unchanged
     # Cargo.lock, not just ones introduced by a push/PR.
     - cron: "0 6 * * 1"
+  # Lets release.yml's `validate` job call this workflow directly, so a
+  # release gates on the exact tagged commit passing these same checks,
+  # not on trusting that main was green when the tag was cut.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned rather than `ubuntu-latest`, so the runner OS moves on our own
+    # schedule, not silently whenever GitHub flips the default (it's
+    # migrating `ubuntu-latest` to this same version in November 2026
+    # anyway). Ubuntu 22.04-based images are themselves now deprecating
+    # (unsupported by 2027-04-17), so 26.04 rather than 24.04 -- it's been
+    # GA since 2026-09-20, not just a future default.
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -35,10 +45,10 @@ jobs:
           git diff --exit-code -- RULES.md
 
   audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-audit
       - name: Audit

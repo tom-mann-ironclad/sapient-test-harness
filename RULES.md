@@ -32,12 +32,13 @@ Every rule ID follows `<message_type>.<field>.<violation_kind>`, where `violatio
 | `registration.config_data.manufacturer.missing` | Configuration data manufacturer must be specified. |
 | `registration.config_data.model.missing` | Configuration data model must be specified. |
 | `registration.dependent_nodes.invalid` | A valid UUID v4 must be used for a dependent node ID in registration. |
+| `registration.detection_class_definition.confidence_definition.invalid` | Confidence definition is not a valid option in detection class definition. |
 | `registration.detection_definition.location_type.missing` | Location type must be specified in detection definition. |
 | `registration.detection_report.category.missing` | Detection report category must be specified. |
 | `registration.detection_report.type.missing` | Detection report type must be specified. |
 | `registration.detection_report.units.missing` | Detection report units must be specified. |
 | `registration.duration.units.missing` | Time Units must be specified. |
-| `registration.duration.value.invalid` | Duration value must be 0 or greater. |
+| `registration.duration.value.invalid` | Duration value must be a finite number 0 or greater. |
 | `registration.duration.value.missing` | Duration value must be provided. |
 | `registration.enu_velocity_units.east_north_rate_units.missing` | East/north rate units must be specified in velocity type. |
 | `registration.enu_velocity_units.up_rate_units.invalid` | Up rate units is not a valid option in velocity type. |
@@ -102,6 +103,9 @@ Rule ID prefixes passed to `common.rs`'s composite validators (each combines wit
 | `status_report.active_task_id.invalid` | A valid ULID must be used for an active task ID in a status report. |
 | `status_report.info.invalid` | Info must be specified in status report. |
 | `status_report.mode.missing` | Mode must be specified in status report. |
+| `status_report.power.level.invalid` | Power level must be between 0 and 100 in status report. |
+| `status_report.power.source.invalid` | Power source is not a valid option in status report. |
+| `status_report.power.status.invalid` | Power status is not a valid option in status report. |
 | `status_report.report_id.invalid` | A valid ULID must be used for a report ID in a status report. |
 | `status_report.status.status_level.invalid` | Status level is not a valid option in status report. |
 | `status_report.status.status_type.missing` | Status type must be specified in status report. |
@@ -190,9 +194,12 @@ Rule ID prefixes passed to `common.rs`'s composite validators (each combines wit
 | Rule ID | Message |
 |---|---|
 | `alert.alert_id.invalid` | A valid ULID must be used for an alert ID in an alert message. |
+| `alert.alert_type.invalid` | Alert type is not a valid option in an alert message. |
 | `alert.confidence.invalid` | Alert confidence must be between 0.0 and 1.0. |
+| `alert.priority.invalid` | Alert priority is not a valid option in an alert message. |
 | `alert.ranking.invalid` | Alert ranking must be between 0.0 and 1.0. |
 | `alert.region_id.invalid` | A valid ULID must be used for a region ID in an alert message. |
+| `alert.status.invalid` | Alert status is not a valid option in an alert message. |
 
 Rule ID prefixes passed to `common.rs`'s composite validators (each combines with a fixed suffix at runtime to build the real rule IDs):
 
