@@ -26,6 +26,7 @@ use sapient_conformance_core::{
 };
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
+use crate::finding_log::FindingLog;
 
 /// Progress from the most recently processed inbound message, consumed with
 /// [`AsmSession::take_event`]. Invalid or uncorrelated AlertAck payloads do not
@@ -91,7 +92,10 @@ pub struct AsmSession {
     /// us) -- used as `destination_id` on our own outgoing messages.
     peer_node_id: Option<String>,
     state: AsmSessionState,
-    findings: Vec<Finding>,
+    /// Adjacent-repeat-collapsing, so a long-running session isn't grown
+    /// unboundedly by a peer that keeps tripping the same check. See
+    /// [`FindingLog`]'s own docs.
+    findings: FindingLog,
     current_raw: Vec<u8>,
     /// Single-message progress slot, reset before decoding each inbound frame.
     /// Findings have separate retention; this slot is not an event queue.
@@ -104,7 +108,7 @@ impl AsmSession {
             harness_node_id: harness_node_id.into(),
             peer_node_id: None,
             state: AsmSessionState::NotRegistered,
-            findings: Vec::new(),
+            findings: FindingLog::default(),
             current_raw: Vec::new(),
             event: None,
         }
@@ -121,12 +125,12 @@ impl AsmSession {
     }
 
     pub fn findings(&self) -> &[Finding] {
-        &self.findings
+        self.findings.as_slice()
     }
 
     /// Drain and return every finding recorded so far.
     pub fn take_findings(&mut self) -> Vec<Finding> {
-        std::mem::take(&mut self.findings)
+        self.findings.take()
     }
 
     /// Harness-initiated: send our own `Registration` to the DMM. Must be

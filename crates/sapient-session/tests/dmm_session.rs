@@ -883,6 +883,19 @@ fn alert_receives_an_alert_ack_reply() {
         }
         other => panic!("expected an AlertAck, got {other:?}"),
     }
+
+    // The DMM acks synchronously, in the same call, so nothing should be
+    // left tracked as outstanding afterwards -- a peer sending many alerts
+    // over a long-running session must not grow this set unboundedly.
+    if let SessionState::Registered(contract) = session.state() {
+        assert!(
+            contract.outstanding_alert_ids.is_empty(),
+            "outstanding_alert_ids should be empty after a synchronous ack, got {:?}",
+            contract.outstanding_alert_ids
+        );
+    } else {
+        panic!("expected Registered state");
+    }
 }
 
 #[test]
@@ -965,6 +978,42 @@ fn post_registration_invalid_message_triggers_an_error_reply() {
     assert!(matches!(decode(&reply).content, Some(Content::Error(_))));
     // Purely informational -- session stays Registered.
     assert!(matches!(session.state(), SessionState::Registered(_)));
+}
+
+#[test]
+fn repeated_identical_findings_are_collapsed_not_accumulated() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    register(&mut session);
+
+    // A peer stuck resending the exact same malformed StatusReport (e.g. a
+    // buggy retry loop) must not grow the retained findings without bound
+    // over a long-running session.
+    let mut bad_status_report = match status_report_at(1, DEFAULT_MODE).content {
+        Some(Content::StatusReport(status_report)) => status_report,
+        _ => unreachable!(),
+    };
+    bad_status_report.system = None;
+
+    for seconds in 1..=50 {
+        session.on_bytes(&encode(envelope(
+            ASM_NODE_ID,
+            HARNESS_NODE_ID,
+            seconds,
+            Content::StatusReport(bad_status_report.clone()),
+        )));
+    }
+
+    let findings = session.findings();
+    assert_eq!(
+        findings.len(),
+        1,
+        "50 identical failures should collapse into one entry, got {findings:?}"
+    );
+    assert!(
+        findings[0].message.ends_with("(repeated 50 times)"),
+        "expected the repeat count in the message, got {:?}",
+        findings[0].message
+    );
 }
 
 #[test]

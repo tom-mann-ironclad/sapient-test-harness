@@ -8,6 +8,7 @@ pub mod active_mode;
 pub mod asm;
 pub mod asm_state;
 pub mod dmm;
+mod finding_log;
 pub mod fixtures;
 pub mod framing;
 pub mod state;

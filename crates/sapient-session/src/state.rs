@@ -34,6 +34,7 @@ use sapient_conformance_core::{
 };
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
+use crate::finding_log::FindingLog;
 
 /// Progress from the most recently processed message. These events let callers
 /// distinguish acknowledged work from state cleared by GoodBye/re-registration.
@@ -156,7 +157,10 @@ pub struct DmmSession {
     /// This harness's own node ID, stamped on every outgoing message.
     harness_node_id: String,
     state: SessionState,
-    findings: Vec<Finding>,
+    /// Adjacent-repeat-collapsing, so a long-running session isn't grown
+    /// unboundedly by a peer that keeps tripping the same check. See
+    /// [`FindingLog`]'s own docs.
+    findings: FindingLog,
     /// The raw bytes of whatever's currently being processed by
     /// `on_message`/the decode-failure path in `on_bytes` -- scratch
     /// space so `error_reply` can embed the actual offending packet in
@@ -186,7 +190,7 @@ impl DmmSession {
         DmmSession {
             harness_node_id: harness_node_id.into(),
             state: SessionState::AwaitingRegistration,
-            findings: Vec::new(),
+            findings: FindingLog::default(),
             current_raw: Vec::new(),
             event: None,
             allowed_status_report_intervals: DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS,
@@ -211,12 +215,12 @@ impl DmmSession {
     }
 
     pub fn findings(&self) -> &[Finding] {
-        &self.findings
+        self.findings.as_slice()
     }
 
     /// Drain and return every finding recorded so far.
     pub fn take_findings(&mut self) -> Vec<Finding> {
-        std::mem::take(&mut self.findings)
+        self.findings.take()
     }
 
     /// Feed raw bytes received from the peer (already de-framed -- the
@@ -655,7 +659,13 @@ impl DmmSession {
         }
 
         let alert_id = alert.alert_id.clone().unwrap_or_default();
+        // The ack is always sent synchronously below, in the same call, so
+        // there's nothing left outstanding by the time this returns -- kept
+        // as an insert+remove pair (not simply omitted) so the set stays
+        // meaningful scaffolding for a future asynchronous-ack design,
+        // without leaking unboundedly in today's synchronous one.
         contract.outstanding_alert_ids.insert(alert_id.clone());
+        contract.outstanding_alert_ids.remove(&alert_id);
 
         Some(self.alert_ack_reply(alert_id))
     }
@@ -1061,7 +1071,7 @@ fn validate_declared_subclasses(
     declared: &[sapient_conformance_core::bsi_flex_335_v2_0::registration::SubClass],
     mode_name: Option<&str>,
     ancestry: &str,
-    findings: &mut Vec<Finding>,
+    findings: &mut FindingLog,
 ) {
     for sub in reported {
         let Some(sub_type) = sub.r#type.as_deref() else {
