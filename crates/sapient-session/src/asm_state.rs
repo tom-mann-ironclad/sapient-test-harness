@@ -15,7 +15,7 @@ use sapient_conformance_core::{
         SapientMessage, StatusReport, Task, TaskAck,
         registration::ModeDefinition,
         sapient_message::Content,
-        task::{Command as TaskCommand, command::Command as TaskCommandKind},
+        task::{Command as TaskCommand, Control, command::Command as TaskCommandKind},
         task_ack::TaskStatus,
     },
     finding::{Finding, Severity},
@@ -69,6 +69,12 @@ pub struct RegisteredAsmContract {
     /// our own `MODE_TYPE_DEFAULT` mode and changes when the DMM issues a
     /// `mode_change` `Task`.
     pub active_mode: ModeDefinition,
+    /// The mode we were in immediately before the current `active_mode`,
+    /// if a mode-change has happened since Registration -- a single-level
+    /// undo slot, not a full history. Set whenever a mode-change task takes
+    /// effect, and consumed (reverted into, then cleared) by a `CONTROL_STOP`
+    /// naming the currently active mode.
+    pub previous_mode: Option<ModeDefinition>,
     /// `alert_id`s we've sent that haven't yet been acknowledged by a
     /// matching `AlertAck` from the DMM.
     pub outstanding_alert_ids: HashSet<String>,
@@ -339,6 +345,7 @@ impl AsmSession {
         self.state = AsmSessionState::Registered(Box::new(RegisteredAsmContract {
             registration: pending_registration,
             active_mode,
+            previous_mode: None,
             outstanding_alert_ids: HashSet::new(),
         }));
         self.event = Some(AsmEvent::RegistrationAccepted);
@@ -359,6 +366,9 @@ impl AsmSession {
         }
 
         let task_id = task.task_id.clone().unwrap_or_default();
+        // Already validated by `validate_task`, which only accepts Start/Stop/Pause.
+        let control = Control::try_from(task.control.unwrap_or_default())
+            .expect("validated Task has a defined control value");
 
         if let Some(TaskCommand {
             command: Some(TaskCommandKind::ModeChange(target_mode_name)),
@@ -372,6 +382,55 @@ impl AsmSession {
                 .find(|mode| mode.mode_name.as_deref() == Some(target_mode_name.as_str()))
             {
                 Some(mode) => {
+                    let already_active = contract.active_mode.mode_name.as_deref()
+                        == Some(target_mode_name.as_str());
+                    // CONTROL_STOP "stop[s] the task, remove[s] the definition
+                    // and revert[s] to the previous task" -- it does not mean
+                    // "start the named mode". Naming a mode that isn't
+                    // already active doesn't correspond to any task this
+                    // simulated ASM could be stopping (single-level history
+                    // only, see `previous_mode`), so that's rejected. Naming
+                    // the mode we're already in ends that task for real: it
+                    // reverts to whatever was active immediately before,
+                    // consuming that single-level undo slot -- if there's
+                    // nothing recorded there (no mode-change has happened
+                    // since Registration), there's genuinely no previous
+                    // task to revert to, so that's rejected too.
+                    // CONTROL_PAUSE has the same "revert to previous" schema
+                    // wording as Stop, but is deliberately left with the
+                    // existing (Start-like) behavior for now -- its lifecycle
+                    // semantics are still open, see KI-033 in known_issues.md.
+                    if control == Control::Stop {
+                        if already_active {
+                            return match contract.previous_mode.take() {
+                                Some(previous) => {
+                                    contract.active_mode = previous;
+                                    Some(self.task_ack_reply(task_id, TaskStatus::Accepted, vec![]))
+                                }
+                                None => Some(self.task_ack_reply(
+                                    task_id,
+                                    TaskStatus::Rejected,
+                                    vec![format!(
+                                        "Stop requested for the active mode \
+                                         {target_mode_name:?}, but no mode-change has \
+                                         happened since Registration; there is no previous \
+                                         task to revert to."
+                                    )],
+                                )),
+                            };
+                        }
+                        let current_mode_name = contract.active_mode.mode_name.clone();
+                        return Some(self.task_ack_reply(
+                            task_id,
+                            TaskStatus::Rejected,
+                            vec![format!(
+                                "Stop requested for mode {target_mode_name:?}, which is not \
+                                 the currently active mode ({current_mode_name:?}); there is \
+                                 no such task to stop."
+                            )],
+                        ));
+                    }
+                    contract.previous_mode = Some(contract.active_mode.clone());
                     contract.active_mode = mode.clone();
                     return Some(self.task_ack_reply(task_id, TaskStatus::Accepted, vec![]));
                 }

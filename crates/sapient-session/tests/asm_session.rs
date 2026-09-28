@@ -335,6 +335,160 @@ fn mode_change_task_to_known_mode_updates_active_mode_and_accepts() {
 }
 
 #[test]
+fn stop_task_naming_an_inactive_mode_is_rejected() {
+    let mut session = AsmSession::new(HARNESS_NODE_ID);
+    register_and_accept(&mut session);
+
+    // CONTROL_STOP means "stop this task and revert to the previous one",
+    // not "start the named mode" -- naming a mode that isn't already
+    // active doesn't correspond to any task this simulated ASM (which
+    // doesn't track a task history) could actually be stopping.
+    let reply = session
+        .on_bytes(&encode(envelope(
+            1,
+            Content::Task(Task {
+                task_id: Some("01H1VV3VN40RV97CDFSXJB44KA".to_string()),
+                task_name: None,
+                task_description: None,
+                task_start_time: None,
+                task_end_time: None,
+                control: Some(2), // CONTROL_STOP
+                region: vec![],
+                command: Some(Command {
+                    command_parameter: None,
+                    command: Some(TaskCommandKind::ModeChange(ALTERNATE_MODE.to_string())),
+                }),
+            }),
+        )))
+        .unwrap();
+
+    match decode(&reply).content {
+        Some(Content::TaskAck(ack)) => {
+            assert_eq!(ack.task_status, Some(TaskStatus::Rejected as i32))
+        }
+        other => panic!("expected a TaskAck, got {other:?}"),
+    }
+    if let AsmSessionState::Registered(contract) = session.state() {
+        assert_eq!(
+            contract.active_mode.mode_name.as_deref(),
+            Some(DEFAULT_MODE)
+        );
+    } else {
+        panic!("expected Registered state");
+    }
+}
+
+fn mode_change_task(task_id: &str, control: i32, target_mode: &str) -> Task {
+    Task {
+        task_id: Some(task_id.to_string()),
+        task_name: None,
+        task_description: None,
+        task_start_time: None,
+        task_end_time: None,
+        control: Some(control),
+        region: vec![],
+        command: Some(Command {
+            command_parameter: None,
+            command: Some(TaskCommandKind::ModeChange(target_mode.to_string())),
+        }),
+    }
+}
+
+#[test]
+fn stop_task_naming_the_active_mode_is_rejected_with_no_prior_mode_change() {
+    let mut session = AsmSession::new(HARNESS_NODE_ID);
+    register_and_accept(&mut session);
+
+    // No mode-change has happened since Registration, so there's genuinely
+    // no previous task for a Stop of the (never-changed) active mode to
+    // revert to.
+    let reply = session
+        .on_bytes(&encode(envelope(
+            1,
+            Content::Task(mode_change_task(
+                "01H1VV3VN40RV97CDFSXJB44KA",
+                2,
+                DEFAULT_MODE,
+            )),
+        )))
+        .unwrap();
+
+    match decode(&reply).content {
+        Some(Content::TaskAck(ack)) => {
+            assert_eq!(ack.task_status, Some(TaskStatus::Rejected as i32))
+        }
+        other => panic!("expected a TaskAck, got {other:?}"),
+    }
+    if let AsmSessionState::Registered(contract) = session.state() {
+        assert_eq!(
+            contract.active_mode.mode_name.as_deref(),
+            Some(DEFAULT_MODE)
+        );
+    } else {
+        panic!("expected Registered state");
+    }
+}
+
+#[test]
+fn stop_task_naming_the_active_mode_reverts_to_the_previous_one() {
+    let mut session = AsmSession::new(HARNESS_NODE_ID);
+    register_and_accept(&mut session);
+
+    // Start into Alternate, recording Default as the single-level undo slot.
+    session
+        .on_bytes(&encode(envelope(
+            1,
+            Content::Task(mode_change_task(
+                "01H1VV3VN40RV97CDFSXJB44KA",
+                1,
+                ALTERNATE_MODE,
+            )),
+        )))
+        .unwrap();
+    if let AsmSessionState::Registered(contract) = session.state() {
+        assert_eq!(
+            contract.active_mode.mode_name.as_deref(),
+            Some(ALTERNATE_MODE)
+        );
+    } else {
+        panic!("expected Registered state");
+    }
+
+    // A Stop naming the now-active Alternate mode really ends that task:
+    // it reverts to Default, not a no-op.
+    let reply = session
+        .on_bytes(&encode(envelope(
+            2,
+            Content::Task(mode_change_task(
+                "01H1VV3VN40RV97CDFSXJB44KB",
+                2,
+                ALTERNATE_MODE,
+            )),
+        )))
+        .unwrap();
+
+    match decode(&reply).content {
+        Some(Content::TaskAck(ack)) => {
+            assert_eq!(ack.task_status, Some(TaskStatus::Accepted as i32))
+        }
+        other => panic!("expected a TaskAck, got {other:?}"),
+    }
+    if let AsmSessionState::Registered(contract) = session.state() {
+        assert_eq!(
+            contract.active_mode.mode_name.as_deref(),
+            Some(DEFAULT_MODE)
+        );
+        assert!(
+            contract.previous_mode.is_none(),
+            "the undo slot is consumed, not stacked"
+        );
+    } else {
+        panic!("expected Registered state");
+    }
+    assert!(session.findings().is_empty());
+}
+
+#[test]
 fn mode_change_task_to_unknown_mode_is_rejected_and_a_finding() {
     let mut session = AsmSession::new(HARNESS_NODE_ID);
     register_and_accept(&mut session);
