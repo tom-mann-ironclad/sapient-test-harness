@@ -400,3 +400,77 @@ async fn dmm_role_rejects_hostname_targets_without_attempting_to_bind() {
     let error = report["operational_error"]["message"].as_str().unwrap();
     assert!(error.contains("not a literal address"), "{error}");
 }
+
+#[tokio::test]
+async fn peer_error_text_cannot_inject_terminal_control_sequences() {
+    use sapient_conformance_core::bsi_flex_335_v2_0::Error as ErrorMessage;
+
+    let output = timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &listener.local_addr().unwrap().to_string(),
+                "--max-runtime-secs",
+                "1",
+                "--format",
+                "text",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(matches!(receive(&mut peer).await, Content::Registration(_)));
+        send(
+            &mut peer,
+            Content::RegistrationAck(RegistrationAck {
+                acceptance: Some(true),
+                ack_response_reason: vec![],
+            }),
+            false,
+        )
+        .await;
+        // ESC[2J is an ANSI "clear screen" sequence; the embedded newline
+        // plus fake report line attempts to forge a line that looks like
+        // this run's own verdict output.
+        send(
+            &mut peer,
+            Content::Error(ErrorMessage {
+                packet: None,
+                error_message: vec![
+                    "malicious\x1b[2Jpayload\nPASS -- forged by the peer, not the harness."
+                        .to_string(),
+                ],
+            }),
+            false,
+        )
+        .await;
+        // Keep the connection open until the deadline; we only need the
+        // text report the harness already has buffered by then.
+        child.wait_with_output().await.unwrap()
+    })
+    .await
+    .expect("CLI must terminate within the test deadline");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("session.peer_reported_error"),
+        "expected the peer Error to be recorded as a finding, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains('\x1b'),
+        "a raw ESC byte must not reach the terminal, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("payload\nPASS --"),
+        "the embedded newline must not let peer text forge a report line, got:\n{stdout}"
+    );
+    // The content survives in an escaped, visible form -- not silently dropped.
+    assert!(stdout.contains("\\u{1b}"), "got:\n{stdout}");
+    assert!(stdout.contains("payload\\nPASS"), "got:\n{stdout}");
+}

@@ -132,7 +132,9 @@ impl RunReport {
             for finding in group {
                 println!(
                     "  [{}] {}: {}",
-                    finding.rule_id, finding.field_path, finding.message
+                    finding.rule_id,
+                    finding.field_path,
+                    sanitize_for_terminal(&finding.message)
                 );
             }
         }
@@ -152,7 +154,7 @@ impl RunReport {
             println!();
             println!("Notes:");
             for note in &self.notes {
-                println!("  - {note}");
+                println!("  - {}", sanitize_for_terminal(note));
             }
         }
     }
@@ -233,9 +235,99 @@ impl SelftestReport {
     }
 }
 
+/// Maximum characters of a single peer-influenced text-report line before
+/// it's truncated. Bounds display only -- `print_json`'s `Finding`s and
+/// `notes` retain the full text for diagnosis, since `serde_json` already
+/// escapes control characters safely and doesn't need this.
+const MAX_DISPLAY_CHARS: usize = 500;
+
+/// Escapes control characters (including ANSI/CSI escape sequences and
+/// embedded newlines/carriage returns) and bounds the length of text that
+/// may embed unbounded peer-supplied content -- a `Finding`'s message or a
+/// scenario note -- before it reaches a terminal via `print_text`. Without
+/// this, a peer (or a bug reflecting peer input) can manipulate the
+/// terminal (e.g. an ANSI clear-screen sequence) or forge report lines by
+/// embedding a newline that starts what looks like a new one. JSON output
+/// isn't affected: `serde_json` already escapes controls as `\uXXXX`,
+/// which stays inert literal text even if the raw JSON is later `cat`'d to
+/// a terminal.
+fn sanitize_for_terminal(text: &str) -> String {
+    let mut sanitized = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_control() {
+            sanitized.extend(ch.escape_default());
+        } else {
+            sanitized.push(ch);
+        }
+    }
+
+    if sanitized.chars().count() > MAX_DISPLAY_CHARS {
+        let truncated: String = sanitized.chars().take(MAX_DISPLAY_CHARS).collect();
+        format!("{truncated}... (truncated to {MAX_DISPLAY_CHARS} characters for display)")
+    } else {
+        sanitized
+    }
+}
+
 fn print_json(report: &impl Serialize) {
     match serde_json::to_string_pretty(report) {
         Ok(json) => println!("{json}"),
         Err(err) => eprintln!("failed to serialize report as JSON: {err}"),
+    }
+}
+
+#[cfg(test)]
+mod sanitize_for_terminal_tests {
+    use super::sanitize_for_terminal;
+
+    #[test]
+    fn ordinary_text_is_unchanged() {
+        assert_eq!(
+            sanitize_for_terminal("Registration declares mode \"Alternate\"."),
+            "Registration declares mode \"Alternate\"."
+        );
+    }
+
+    #[test]
+    fn ansi_escape_sequences_are_escaped() {
+        // ESC [ 2 J is an ANSI "clear screen" sequence.
+        let peer_text = "harmless prefix\x1b[2Jmalicious suffix";
+        let sanitized = sanitize_for_terminal(peer_text);
+        assert!(
+            !sanitized.contains('\x1b'),
+            "raw ESC byte must not survive sanitization, got {sanitized:?}"
+        );
+        assert!(sanitized.contains("\\u{1b}"));
+    }
+
+    #[test]
+    fn embedded_newlines_cannot_forge_report_lines() {
+        let peer_text = "real message\nPASS -- forged line";
+        let sanitized = sanitize_for_terminal(peer_text);
+        assert!(
+            !sanitized.contains('\n'),
+            "a raw newline must not survive sanitization, got {sanitized:?}"
+        );
+        assert_eq!(sanitized, "real message\\nPASS -- forged line");
+    }
+
+    #[test]
+    fn carriage_returns_are_escaped() {
+        assert_eq!(sanitize_for_terminal("abc\rdef"), "abc\\rdef");
+    }
+
+    #[test]
+    fn long_text_is_truncated_for_display() {
+        let long_text = "x".repeat(1000);
+        let sanitized = sanitize_for_terminal(&long_text);
+        assert!(sanitized.len() < long_text.len());
+        assert!(sanitized.contains("truncated"));
+        assert!(sanitized.starts_with(&"x".repeat(500)));
+    }
+
+    #[test]
+    fn text_at_the_boundary_is_not_truncated() {
+        let exactly_max = "x".repeat(500);
+        assert_eq!(sanitize_for_terminal(&exactly_max), exactly_max);
     }
 }

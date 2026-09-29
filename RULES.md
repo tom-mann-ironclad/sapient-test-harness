@@ -56,6 +56,7 @@ Every rule ID follows `<message_type>.<field>.<violation_kind>`, where `violatio
 | `registration.location_type.units.invalid` | Units must be specified in location type. |
 | `registration.location_type.units.missing` | Units must be specified in location type. |
 | `registration.mode_definition.empty` | Mode definition must be specified in registration. |
+| `registration.mode_definition.mode_name.invalid` | Mode names must be unique so a mode_change Task can address each unambiguously. |
 | `registration.mode_definition.mode_name.missing` | Mode name must be specified in mode definition. |
 | `registration.mode_definition.mode_type.missing` | Mode type must be specified. |
 | `registration.mode_definition.settle_time.missing` | Settle time must be specified in mode definition. |

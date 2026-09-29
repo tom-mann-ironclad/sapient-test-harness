@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::bsi_flex_335_v2_0::registration::location_type::CoordinatesOneof::{
     LocationUnits, RangeBearingUnits,
 };
@@ -251,6 +253,33 @@ fn validate_mode_definitions(mode_definitions: Vec<ModeDefinition>) -> Validatio
             "registration.mode_definition.empty",
             "Mode definition must be specified in registration.",
         );
+    }
+
+    // Duplicate mode names make the contract genuinely ambiguous: a
+    // mode_change Task addresses a mode by name via case-sensitive exact
+    // match (the same policy the session uses at runtime to look one up),
+    // so two modes sharing a name means the second one can never be
+    // addressed -- lookup would silently resolve to whichever was declared
+    // first. Case-sensitive to match that lookup policy exactly; this is
+    // separate from (and narrower in scope than) the case-insensitive
+    // fallback that resolves an *unnamed* default mode by looking for one
+    // named "default".
+    let mut seen_names: HashSet<&str> = HashSet::new();
+    for mode_definition in &mode_definitions {
+        if let Some(name) = mode_definition.mode_name.as_deref()
+            && !seen_names.insert(name)
+        {
+            // Message is a plain, single-line string literal (not
+            // `format!`, and not backslash-continued onto a second line,
+            // though the specific duplicated name is available above) so
+            // `scripts/generate-rules.sh`'s single-line message regex can
+            // extract it into RULES.md instead of falling back to "(see
+            // source)".
+            return ValidationOutcome::fail(
+                "registration.mode_definition.mode_name.invalid",
+                "Mode names must be unique so a mode_change Task can address each unambiguously.",
+            );
+        }
     }
 
     let mut validations = vec![];
@@ -1605,6 +1634,85 @@ mod registration_validation_tests {
                 "Mode name must be specified in mode definition."
             ),
             validate_mode_definitions(vec![invalid_mode_definition])
+        );
+    }
+
+    /// Two modes with the same name make the contract genuinely ambiguous
+    /// (a mode_change Task can't address the second one), and duplicate
+    /// mode names are the real-world case Tom (the standard's principal
+    /// author) has actually seen from suppliers -- confirmed rejected
+    /// rather than a case-insensitive or lenient policy.
+    #[test]
+    fn test_duplicate_mode_names_are_rejected() {
+        let settle_time = Duration {
+            units: Some(1),
+            value: Some(1.0),
+        };
+        let valid_location_type = LocationType {
+            coordinates_oneof: Some(CoordinatesOneof::RangeBearingUnits(1)),
+            datum_oneof: Some(DatumOneof::RangeBearingDatum(1)),
+            zone: None,
+        };
+        let detection_definition = DetectionDefinition {
+            behaviour_definition: vec![],
+            detection_performance: vec![],
+            detection_class_definition: vec![],
+            detection_report: vec![],
+            geometric_error: None,
+            velocity_type: None,
+            location_type: Some(valid_location_type),
+        };
+        let mode = |name: &str| ModeDefinition {
+            duration: None,
+            maximum_latency: None,
+            detection_definition: vec![detection_definition.clone()],
+            mode_name: Some(name.to_string()),
+            mode_parameter: vec![],
+            mode_description: None,
+            mode_type: Some(1),
+            scan_type: None,
+            settle_time: Some(settle_time),
+            task: Some(TaskDefinition {
+                command: vec![],
+                concurrent_tasks: Some(1),
+                region_definition: Some(RegionDefinition {
+                    settle_time: None,
+                    region_type: vec![1],
+                    region_area: vec![LocationType {
+                        coordinates_oneof: Some(CoordinatesOneof::LocationUnits(1)),
+                        datum_oneof: Some(DatumOneof::LocationDatum(1)),
+                        zone: None,
+                    }],
+                    class_filter_definition: vec![],
+                    behaviour_filter_definition: vec![],
+                }),
+            }),
+            tracking_type: None,
+        };
+
+        // Identical names, otherwise-conflicting definitions (mode_type
+        // differs) -- still rejected on the name collision alone.
+        let mut second_mode_conflicting = mode("Default");
+        second_mode_conflicting.mode_type = Some(3);
+        assert_eq!(
+            ValidationOutcome::fail(
+                "registration.mode_definition.mode_name.invalid",
+                "Mode names must be unique so a mode_change Task can address each unambiguously."
+            ),
+            validate_mode_definitions(vec![mode("Default"), second_mode_conflicting])
+        );
+
+        // Names differing only by case are distinct under the
+        // case-sensitive exact-match lookup policy, so not a collision.
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_mode_definitions(vec![mode("Default"), mode("default")])
+        );
+
+        // Distinct names remain valid.
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_mode_definitions(vec![mode("Default"), mode("Alternate")])
         );
     }
 

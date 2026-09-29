@@ -309,7 +309,7 @@
         }
       },
       {
-        "modeName": "Default",
+        "modeName": "Alternate1",
         "modeType": "MODE_TYPE_PERMANENT",
         "modeDescription": "Test Description",
         "settleTime": {
@@ -560,7 +560,7 @@
         }
       },
       {
-        "modeName": "Default",
+        "modeName": "Alternate2",
         "modeType": "MODE_TYPE_PERMANENT",
         "modeDescription": "Test Description",
         "settleTime": {
