@@ -249,10 +249,10 @@ since that's what this repo's own CI uses (`.github/workflows/ci.yml`):
 - name: Run SAPIENT conformance test
   id: conformance
   run: |
+    status=0
     sapient-harness run --role asm --target your-c2-node-host:5000 \
-      --format json > result.json
-    echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-  continue-on-error: true # let later steps run even on a failing result
+      --format json > result.json || status=$?
+    echo "exit_code=$status" >> "$GITHUB_OUTPUT"
 
 - name: Upload conformance result
   if: always() # capture the artifact whether it passed or not
@@ -266,13 +266,26 @@ since that's what this repo's own CI uses (`.github/workflows/ci.yml`):
   run: exit 1
 ```
 
-`continue-on-error` on the run step keeps the job alive long enough to
-upload the artifact even when the harness itself exits non-zero; the
-final step is what actually fails the job, based on the exit code the
-first step recorded. If you need to tell "conformance findings" (`1`)
-apart from "the harness itself couldn't run" (`2`) in CI, branch on
-`steps.conformance.outputs.exit_code` directly instead of the
-`!= '0'` check above.
+GitHub Actions runs each step's `run:` script with the shell's fail-fast
+option on by default, so if the harness call is left unguarded (e.g.
+`... > result.json` followed directly by `echo "exit_code=$?" ...`), a
+non-zero exit aborts the script *before* that `echo` line ever runs --
+the output is silently never set, rather than being set to the exit code.
+The final gate step still happens to fail the job either way (an unset
+output isn't `'0'` either), so this is easy to miss, but the whole point
+of capturing `1` vs `2` separately is lost. `sapient-harness ... ||
+status=$?` avoids this: a command on the left of `||` is exempt from
+fail-fast, so the script keeps running and `status` reliably ends up
+holding the real exit code either way. Because the failure is now
+contained in the `status` variable rather than propagating to the step's
+own exit code, `continue-on-error` is no longer needed on the run step
+either -- the script's last command (`echo`) always succeeds, so the step
+itself always succeeds regardless of what the harness returned.
+
+If you need to tell "conformance findings" (`1`) apart from "the harness
+itself couldn't run" (`2`) in CI, branch on
+`steps.conformance.outputs.exit_code` directly instead of the `!= '0'`
+check above.
 
 ## 6. Sending custom messages
 
