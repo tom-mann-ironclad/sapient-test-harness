@@ -62,23 +62,20 @@ pub enum ReplyOutcome {
 }
 
 /// Validates `message` against this crate's own conformance rules, then
-/// sends it over `stream` regardless of the validation outcome, and waits
-/// up to `response_timeout` for one reply frame. Transmission is bounded separately
-/// by `write_timeout`; discard the stream on a write timeout or other I/O error.
-/// Only an I/O failure (including a write timeout)
-/// (not an invalid outgoing message, not an undecodable or absent reply)
-/// returns `Err`. Retain `reader` for the lifetime of this stream so a timeout
-/// can resume a partial reply on the next call. Replies are observed in wire
-/// order; a late reply is not necessarily a response to the latest sent file.
-pub async fn send_message<S>(
+/// sends it over `stream` regardless of the validation outcome. Transmission
+/// is bounded by `write_timeout`; discard the stream on a write timeout or
+/// other I/O error. Returns once the write has completed, so a caller can
+/// print a "sending anyway" warning and confirm the send *before* waiting on
+/// [`wait_for_reply`] -- which is exactly what `send`'s CLI driver does, so
+/// that output reflects each stage as it actually happens rather than only
+/// appearing after the whole round trip (including the reply wait) is over.
+pub async fn validate_and_send<S>(
     stream: &mut S,
-    reader: &mut FrameReader,
     message: &SapientMessage,
-    response_timeout: Duration,
     write_timeout: Duration,
-) -> io::Result<SendOutcome>
+) -> io::Result<ValidationOutcome>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncWrite + Unpin,
 {
     let validation = validate_sapient_message(message.clone());
 
@@ -91,6 +88,21 @@ where
             )
         })??;
 
+    Ok(validation)
+}
+
+/// Waits up to `response_timeout` for one reply frame after a send. Retain
+/// `reader` for the lifetime of this stream so a timeout can resume a
+/// partial reply on the next call. Replies are observed in wire order; a
+/// late reply is not necessarily a response to the latest sent file.
+pub async fn wait_for_reply<S>(
+    stream: &mut S,
+    reader: &mut FrameReader,
+    response_timeout: Duration,
+) -> io::Result<ReplyOutcome>
+where
+    S: AsyncRead + Unpin,
+{
     let reply = match timeout(response_timeout, reader.read(stream)).await {
         Ok(Ok(Some(raw))) => {
             let decoded = SapientMessage::decode(raw.as_slice());
@@ -110,12 +122,50 @@ where
         Err(_elapsed) => ReplyOutcome::TimedOut,
     };
 
+    Ok(reply)
+}
+
+/// Combines [`validate_and_send`] and [`wait_for_reply`] into one call, for
+/// callers that don't need to act between the send completing and the reply
+/// arriving -- the testable core this module's own doc comment describes.
+/// `send`'s CLI driver uses the two halves directly instead, specifically so
+/// it can print progress between them; this wrapper exists for tests and any
+/// other caller that just wants the combined outcome.
+pub async fn send_message<S>(
+    stream: &mut S,
+    reader: &mut FrameReader,
+    message: &SapientMessage,
+    response_timeout: Duration,
+    write_timeout: Duration,
+) -> io::Result<SendOutcome>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let validation = validate_and_send(stream, message, write_timeout).await?;
+    let reply = wait_for_reply(stream, reader, response_timeout).await?;
     Ok(SendOutcome { validation, reply })
 }
 
 pub async fn send(args: SendArgs) -> ExitCode {
     let connect_timeout = Duration::from_secs(args.connect_timeout_secs);
     let response_timeout = Duration::from_secs(args.response_timeout_secs);
+    let write_timeout = Duration::from_secs(args.write_timeout_secs);
+    let message_descriptor = sapient_message_descriptor();
+
+    // Parse every requested file up front, before any connection is
+    // attempted: a missing or malformed file -- first or last in the list
+    // -- must fail locally and immediately, not after a network wait, and
+    // not after earlier files have already been transmitted.
+    let mut messages = Vec::with_capacity(args.files.len());
+    for path in &args.files {
+        match load_message_from_file(path, &message_descriptor) {
+            Ok(message) => messages.push((path.as_path(), message)),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::from(2);
+            }
+        }
+    }
 
     let stream = match args.role {
         Role::Dmm => connect_as_dmm(&args.target, connect_timeout).await,
@@ -131,36 +181,32 @@ pub async fn send(args: SendArgs) -> ExitCode {
 
     let mut reader = FrameReader::new(args.max_frame_bytes)
         .with_large_message_warning(crate::cli::warn_large_message);
-    let message_descriptor = sapient_message_descriptor();
 
-    for path in &args.files {
+    for (path, message) in &messages {
         println!("\n=== {} ===", path.display());
 
-        let message = match load_message_from_file(path, &message_descriptor) {
-            Ok(message) => message,
+        // Validated and sent as one step, so the warning (if any) prints
+        // immediately after validation and before the reply wait -- not
+        // buffered until the whole round trip, including that wait, is over.
+        let validation = match validate_and_send(&mut stream, message, write_timeout).await {
+            Ok(validation) => validation,
             Err(err) => {
                 eprintln!("error: {err}");
                 return ExitCode::from(2);
             }
         };
+        print_validation_warning(&validation);
+        println!("Sent.");
 
-        let outcome = match send_message(
-            &mut stream,
-            &mut reader,
-            &message,
-            response_timeout,
-            Duration::from_secs(args.write_timeout_secs),
-        )
-        .await
-        {
-            Ok(outcome) => outcome,
+        let reply = match wait_for_reply(&mut stream, &mut reader, response_timeout).await {
+            Ok(reply) => reply,
             Err(err) => {
                 eprintln!("error: {err}");
                 return ExitCode::from(2);
             }
         };
-        print_outcome(&outcome, response_timeout);
-        if let ReplyOutcome::UndecodableReply { raw, .. } = outcome.reply {
+        print_reply(path, &reply, response_timeout);
+        if let ReplyOutcome::UndecodableReply { raw, .. } = reply {
             reader.recycle(raw);
         }
     }
@@ -183,10 +229,10 @@ fn load_message_from_file(
     })
 }
 
-fn print_outcome(outcome: &SendOutcome, response_timeout: Duration) {
-    if !outcome.validation.passed {
+fn print_validation_warning(validation: &ValidationOutcome) {
+    if !validation.passed {
         println!("WARNING: this message does not conform to sapient-conformance-core's own rules:");
-        for finding in &outcome.validation.findings {
+        for finding in &validation.findings {
             println!(
                 "  [{}] {}: {}",
                 finding.rule_id, finding.field_path, finding.message
@@ -194,16 +240,23 @@ fn print_outcome(outcome: &SendOutcome, response_timeout: Duration) {
         }
         println!("Sending it anyway.");
     }
-    println!("Sent.");
+}
 
-    match &outcome.reply {
-        ReplyOutcome::Reply(reply) => println!("Reply:\n{reply:#?}"),
+fn print_reply(path: &Path, reply: &ReplyOutcome, response_timeout: Duration) {
+    match reply {
+        ReplyOutcome::Reply(reply) => println!("Reply to {}:\n{reply:#?}", path.display()),
         ReplyOutcome::UndecodableReply { raw, error } => println!(
-            "Reply didn't decode as a SapientMessage: {error} (raw {} bytes)",
+            "Reply to {} didn't decode as a SapientMessage: {error} (raw {} bytes)",
+            path.display(),
             raw.len()
         ),
-        ReplyOutcome::Disconnected => println!("Peer disconnected."),
-        ReplyOutcome::TimedOut => println!("No reply within {response_timeout:?}."),
+        ReplyOutcome::Disconnected => {
+            println!("Peer disconnected after sending {}.", path.display())
+        }
+        ReplyOutcome::TimedOut => println!(
+            "No reply to {} within {response_timeout:?}.",
+            path.display()
+        ),
     }
 }
 
