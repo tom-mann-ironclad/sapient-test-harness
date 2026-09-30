@@ -381,6 +381,113 @@ async fn single_mode_skips_task_probe_explicitly() {
     );
 }
 
+/// A mode with a non-`MODE_TYPE_DEFAULT` *type* isn't necessarily distinct
+/// from the mode actually resolved active: an all-Permanent, legacy-style
+/// registration (no `MODE_TYPE_DEFAULT` at all) can still resolve one of
+/// them active via the case-insensitive Permanent-named-"default"
+/// fallback, and choosing the probe's target by type alone would pick that
+/// exact same mode back -- a same-mode round trip, not a real transition.
+#[tokio::test(start_paused = true)]
+async fn probe_targets_a_different_mode_under_permanent_named_default_fallback() {
+    use sapient_conformance_core::bsi_flex_335_v2_0::registration::ModeType;
+    use sapient_session::fixtures::mode;
+
+    let (stream, mut peer) = duplex(65536);
+    let (r, w) = split(stream);
+    let mut dmm = DmmConnection::new(NODE, r, w);
+    let target = async move {
+        let mut registration = fixtures::valid_registration();
+        registration.mode_definition = vec![
+            mode("Default", ModeType::Permanent),
+            mode("Alternate", ModeType::Permanent),
+        ];
+        send(&mut peer, Content::Registration(registration)).await;
+        assert!(matches!(
+            receive(&mut peer).await,
+            Content::RegistrationAck(_)
+        ));
+        send(
+            &mut peer,
+            Content::StatusReport(StatusReport {
+                report_id: Some(ID.into()),
+                system: Some(1),
+                info: Some(1),
+                mode: Some("Default".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let Content::Task(task) = receive(&mut peer).await else {
+            panic!("expected task")
+        };
+        assert_eq!(
+            task.command.unwrap().command,
+            Some(
+                sapient_conformance_core::bsi_flex_335_v2_0::task::command::Command::ModeChange(
+                    "Alternate".into()
+                )
+            ),
+            "probe must target the mode actually left inactive, not the resolved active one"
+        );
+    };
+    tokio::join!(
+        run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
+        target
+    );
+}
+
+/// As above, for the other fallback path: no mode is named "default" at
+/// all, so the first declared Permanent mode is resolved active. The probe
+/// must still target the *other* one, not loop back to it.
+#[tokio::test(start_paused = true)]
+async fn probe_targets_a_different_mode_under_first_permanent_fallback() {
+    use sapient_conformance_core::bsi_flex_335_v2_0::registration::ModeType;
+    use sapient_session::fixtures::mode;
+
+    let (stream, mut peer) = duplex(65536);
+    let (r, w) = split(stream);
+    let mut dmm = DmmConnection::new(NODE, r, w);
+    let target = async move {
+        let mut registration = fixtures::valid_registration();
+        registration.mode_definition = vec![
+            mode("Wide", ModeType::Permanent),
+            mode("Narrow", ModeType::Permanent),
+        ];
+        send(&mut peer, Content::Registration(registration)).await;
+        assert!(matches!(
+            receive(&mut peer).await,
+            Content::RegistrationAck(_)
+        ));
+        send(
+            &mut peer,
+            Content::StatusReport(StatusReport {
+                report_id: Some(ID.into()),
+                system: Some(1),
+                info: Some(1),
+                mode: Some("Wide".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let Content::Task(task) = receive(&mut peer).await else {
+            panic!("expected task")
+        };
+        assert_eq!(
+            task.command.unwrap().command,
+            Some(
+                sapient_conformance_core::bsi_flex_335_v2_0::task::command::Command::ModeChange(
+                    "Narrow".into()
+                )
+            ),
+            "probe must target the mode actually left inactive, not the resolved active one"
+        );
+    };
+    tokio::join!(
+        run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
+        target
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn reregistration_before_probe_uses_new_contract_and_requires_ack() {
     let (stream, mut peer) = duplex(65536);

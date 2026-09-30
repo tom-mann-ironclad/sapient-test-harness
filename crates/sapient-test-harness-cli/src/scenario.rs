@@ -30,7 +30,6 @@ use sapient_conformance_core::bsi_flex_335_v2_0::{
     Alert, DetectionReport, StatusReport, Task,
     alert::{AlertStatus, AlertType},
     detection_report::{DetectionReportClassification, LocationOneof as DetectionLocationOneof},
-    registration::ModeType,
     status_report::System,
     task::{Command, command::Command as TaskCommandKind},
 };
@@ -289,17 +288,29 @@ where
                     result.require(Check::StatusReport);
                     result.require(Check::TaskAck);
                     if let SessionState::Registered(contract) = connection.state() {
+                        // A mode with a non-Default *type* isn't
+                        // necessarily distinct from the one actually
+                        // resolved active: an all-Permanent registration
+                        // (legacy-style, no MODE_TYPE_DEFAULT at all) can
+                        // resolve its Permanent-named-"default" mode as
+                        // active, and that same mode would still be the
+                        // first "non-Default-type" entry in the list --
+                        // targeting it wouldn't exercise a transition at
+                        // all, just a same-mode round trip. Compare by
+                        // name against the mode that's actually active
+                        // instead.
                         target_mode = contract
                             .registration
                             .mode_definition
                             .iter()
-                            .find(|mode| mode.mode_type != Some(ModeType::Default as i32))
+                            .find(|mode| mode.mode_name != contract.active_mode.mode_name)
                             .and_then(|mode| mode.mode_name.clone());
                     }
                     if target_mode.is_none() {
                         result.skip(
                             Check::TaskAck,
-                            "Registration declares no non-default mode for the probe task.",
+                            "Registration declares no mode distinct from the currently active \
+                             one to probe a transition with.",
                         );
                     }
                 }
