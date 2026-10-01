@@ -8,6 +8,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use sapient_conformance_core::finding::Finding;
+use sapient_conformance_core::validation::common::validate_uuid_v4;
 use sapient_session::framing::FrameReader;
 use sapient_session::{asm::AsmConnection, dmm::DmmConnection};
 use tokio::io::split;
@@ -36,42 +37,48 @@ pub async fn run(args: RunArgs) -> ExitCode {
     let connect_timeout = Duration::from_secs(args.connect_timeout_secs);
     let max_runtime = Duration::from_secs(args.max_runtime_secs);
 
-    let outcome = match args.role {
-        Role::Dmm => {
-            run_as_dmm(
-                &harness_node_id,
-                &args.target,
-                connect_timeout,
-                max_runtime,
-                args.max_frame_bytes,
-                args.allowed_status_report_intervals,
-            )
-            .await
-        }
-        Role::Asm => {
-            run_as_asm(
-                &harness_node_id,
-                &args.target,
-                connect_timeout,
-                max_runtime,
-                args.max_frame_bytes,
-            )
-            .await
-        }
-    };
+    let (findings, scenario) = if let Err(err) = validate_harness_node_id(&harness_node_id) {
+        let mut scenario = ScenarioResult::for_role(args.role);
+        scenario.record_error("configure_node_id", err);
+        (Vec::new(), scenario)
+    } else {
+        let outcome = match args.role {
+            Role::Dmm => {
+                run_as_dmm(
+                    &harness_node_id,
+                    &args.target,
+                    connect_timeout,
+                    max_runtime,
+                    args.max_frame_bytes,
+                    args.allowed_status_report_intervals,
+                )
+                .await
+            }
+            Role::Asm => {
+                run_as_asm(
+                    &harness_node_id,
+                    &args.target,
+                    connect_timeout,
+                    max_runtime,
+                    args.max_frame_bytes,
+                )
+                .await
+            }
+        };
 
-    let (findings, scenario) = match outcome {
-        Ok(result) => result,
-        Err(err) => {
-            let mut scenario = ScenarioResult::for_role(args.role);
-            scenario.record_error(
-                match args.role {
-                    Role::Asm => "connect",
-                    Role::Dmm => "listen_or_accept",
-                },
-                err,
-            );
-            (Vec::new(), scenario)
+        match outcome {
+            Ok(result) => result,
+            Err(err) => {
+                let mut scenario = ScenarioResult::for_role(args.role);
+                scenario.record_error(
+                    match args.role {
+                        Role::Asm => "connect",
+                        Role::Dmm => "listen_or_accept",
+                    },
+                    err,
+                );
+                (Vec::new(), scenario)
+            }
         }
     };
 
@@ -88,6 +95,22 @@ pub async fn run(args: RunArgs) -> ExitCode {
     }
 
     report.exit_code()
+}
+
+/// Rejects a `--node-id` that isn't a valid UUID v4 before any socket is
+/// opened, using the same rule `sapient_message.node_id.invalid` enforces
+/// on the wire -- a value that would fail as soon as it's stamped onto the
+/// harness's own outgoing messages should fail locally instead of letting
+/// a strict target reject the harness and look like a conformance failure.
+fn validate_harness_node_id(node_id: &str) -> io::Result<()> {
+    if validate_uuid_v4(Some(node_id), "run.node_id.invalid", "").passed {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("--node-id {node_id:?} is not a valid UUID v4"),
+        ))
+    }
 }
 
 async fn run_as_dmm(

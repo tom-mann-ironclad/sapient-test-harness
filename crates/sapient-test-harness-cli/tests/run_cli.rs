@@ -401,6 +401,111 @@ async fn dmm_role_rejects_hostname_targets_without_attempting_to_bind() {
     assert!(error.contains("not a literal address"), "{error}");
 }
 
+/// KI-024: a malformed `--node-id` must be rejected before the DMM role ever
+/// binds/listens, not stamped onto outgoing messages and left for a strict
+/// target to reject. A real, bindable target with nothing ever connecting
+/// proves this -- the old (buggy) behavior would instead hang until
+/// `--connect-timeout-secs` (default 30s) waiting for a peer, which the
+/// outer 5s timeout would catch as a failure.
+#[tokio::test]
+async fn dmm_role_rejects_an_invalid_node_id_without_attempting_to_bind() {
+    let output = timeout(
+        Duration::from_secs(5),
+        Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "dmm",
+                "--target",
+                "127.0.0.1:0",
+                "--node-id",
+                "not-a-uuid",
+                "--format",
+                "json",
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("must reject an invalid --node-id immediately, not hang waiting for a peer")
+    .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["outcome"], "incomplete");
+    assert_eq!(report["operational_error"]["stage"], "configure_node_id");
+    let error = report["operational_error"]["message"].as_str().unwrap();
+    assert!(
+        error.contains("not-a-uuid") && error.contains("UUID v4"),
+        "{error}"
+    );
+}
+
+/// Same rejection, ASM role: a real but unreachable target proves the
+/// connection attempt is never even made (the old behavior would instead
+/// try to connect and report a `connect`-stage error, or succeed and stamp
+/// the bad node ID onto a real Registration).
+#[tokio::test]
+async fn asm_role_rejects_an_invalid_node_id_without_attempting_to_connect() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+    let output = timeout(
+        Duration::from_secs(5),
+        Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &address,
+                "--node-id",
+                "not-a-uuid",
+                "--format",
+                "json",
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("must reject an invalid --node-id immediately")
+    .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["outcome"], "incomplete");
+    assert_eq!(report["operational_error"]["stage"], "configure_node_id");
+}
+
+/// A `--node-id` that already is a valid UUID v4 must still reach the
+/// network stage -- the validation added for KI-024 must not reject good
+/// input along with bad.
+#[tokio::test]
+async fn a_valid_node_id_still_reaches_the_network() {
+    timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &format!("127.0.0.1:{port}"),
+                "--node-id",
+                "550e8400-e29b-41d4-a716-446655440000",
+                "--max-runtime-secs",
+                "5",
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(matches!(receive(&mut peer).await, Content::Registration(_)));
+        drop(child);
+    })
+    .await
+    .expect("a valid node ID must not block the harness from connecting");
+}
+
 #[tokio::test]
 async fn peer_error_text_cannot_inject_terminal_control_sequences() {
     use sapient_conformance_core::bsi_flex_335_v2_0::Error as ErrorMessage;
