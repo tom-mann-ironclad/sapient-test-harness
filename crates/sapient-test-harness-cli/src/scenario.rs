@@ -15,10 +15,14 @@
 //! does so the correct way: an explicit `GoodBye` `StatusReport` before
 //! disconnecting.
 //!
-//! Progress is streamed to stderr as it happens (`note`, and a heartbeat
-//! during any wait long enough to otherwise look hung) rather than only
-//! shown at the end -- stdout stays reserved for the final report (text or
-//! `--format json`), matching `run.rs`'s own connect/listen messages.
+//! Progress is streamed to stderr as it happens (`note`, a heartbeat during
+//! any wait long enough to otherwise look hung, and every newly observed
+//! conformance finding -- see `stream_new_findings`) rather than only shown
+//! at the end -- stdout stays reserved for the final report (text or
+//! `--format json`), matching `run.rs`'s own connect/listen messages. A
+//! Ctrl-C during either scenario (see `run_dmm_scenario`/`run_asm_scenario`)
+//! stops the run and still produces a report of whatever was observed, the
+//! same way reaching the deadline already did -- it is never a silent kill.
 
 use std::io;
 use std::time::Duration;
@@ -33,6 +37,7 @@ use sapient_conformance_core::bsi_flex_335_v2_0::{
     status_report::System,
     task::{Command, command::Command as TaskCommandKind},
 };
+use sapient_conformance_core::finding::Finding;
 use sapient_session::{
     AsmEvent, AsmSessionState, DmmEvent, SessionState, asm::AsmConnection, dmm::DmmConnection,
     fixtures,
@@ -54,6 +59,47 @@ fn note(notes: &mut Vec<String>, message: impl Into<String>) {
     let message = message.into();
     eprintln!("{message}");
     notes.push(message);
+}
+
+/// Records why a run stopped on Ctrl-C: `tokio::signal::ctrl_c()` itself
+/// failing (the OS refused to let the harness install a signal handler) is
+/// vanishingly unlikely but still worth distinguishing from an actual
+/// interrupt in the note, rather than treating both identically.
+fn note_interrupted(notes: &mut Vec<String>, ctrl_c: io::Result<()>) {
+    match ctrl_c {
+        Ok(()) => note(
+            notes,
+            "Interrupted (Ctrl-C); finalizing the report with whatever was observed so far.",
+        ),
+        Err(err) => note(
+            notes,
+            format!(
+                "Stopping early: could not listen for Ctrl-C ({err}); finalizing the report \
+                 with whatever was observed so far."
+            ),
+        ),
+    }
+}
+
+/// Echoes every finding added to `findings` since the last call (tracked by
+/// `shown`, a count rather than a cursor type since a session's findings
+/// only ever grow during a run) to stderr immediately -- e.g. a
+/// registration-rejection reason, or any other session-level finding --
+/// rather than leaving it buried in the session until the final report.
+/// stdout (reserved for `--format json`) is untouched; sanitized the same
+/// way the final text report is (KI-021), since this text can embed
+/// arbitrary peer-supplied content.
+fn stream_new_findings(findings: &[Finding], shown: &mut usize) {
+    for finding in &findings[*shown..] {
+        eprintln!(
+            "[{:?}] [{}] {}: {}",
+            finding.severity,
+            finding.rule_id,
+            finding.field_path,
+            crate::report::sanitize_for_terminal(&finding.message)
+        );
+    }
+    *shown = findings.len();
 }
 
 /// Outcome of a heartbeat-monitored wait for the next inbound message.
@@ -187,23 +233,33 @@ where
 {
     let mut result = ScenarioResult::for_role(Role::Dmm);
     let mut stage = "starting_scenario";
-    // Progress lives outside the cancellable future so every exit retains it.
-    let outcome = timeout_at(
-        deadline,
-        dmm_steps(connection, deadline, &mut result, &mut stage),
-    )
-    .await;
+    // Progress lives outside the cancellable future so every exit retains it
+    // -- including a Ctrl-C, not just reaching the deadline: dropping the
+    // `dmm_steps` future on either branch of this `select!` cannot discard
+    // `result`, since it's owned by this function's own stack frame, not by
+    // the future being raced and dropped.
+    let outcome = tokio::select! {
+        ctrl_c = tokio::signal::ctrl_c() => {
+            note_interrupted(&mut result.notes, ctrl_c);
+            None
+        }
+        outcome = timeout_at(
+            deadline,
+            dmm_steps(connection, deadline, &mut result, &mut stage),
+        ) => Some(outcome),
+    };
     match outcome {
-        Ok(Err(error)) => result.record_error(stage, error),
-        Err(_) if connection.has_pending_write() => result.record_error(
+        None => {}
+        Some(Ok(Err(error))) => result.record_error(stage, error),
+        Some(Err(_)) if connection.has_pending_write() => result.record_error(
             stage,
             io::Error::new(
                 io::ErrorKind::TimedOut,
                 "run deadline expired with an unfinished write; connection must be closed",
             ),
         ),
-        Err(_) => note(&mut result.notes, "Reached the run's max runtime."),
-        Ok(Ok(())) => {}
+        Some(Err(_)) => note(&mut result.notes, "Reached the run's max runtime."),
+        Some(Ok(Ok(()))) => {}
     }
     // A heartbeat/optional wait may observe the same deadline before the outer timer.
     if result.operational_error.is_none() && connection.has_pending_write() {
@@ -231,6 +287,7 @@ where
     let mut status_received = false;
     let mut target_mode = None;
     let mut issued_task_id = None;
+    let mut shown_findings = 0;
 
     loop {
         if Instant::now() >= deadline {
@@ -266,11 +323,14 @@ where
             };
             *stage = "send_task";
             connection.issue_task(&task).await?;
+            stream_new_findings(connection.findings(), &mut shown_findings);
             issued_task_id = Some(task_id);
         }
 
         *stage = "receive_or_reply";
-        match dmm_poll_with_heartbeat(connection, deadline, "for the ASM").await? {
+        let poll_result = dmm_poll_with_heartbeat(connection, deadline, "for the ASM").await?;
+        stream_new_findings(connection.findings(), &mut shown_findings);
+        match poll_result {
             PollWait::Processed => match connection.take_event() {
                 Some(DmmEvent::RegistrationAccepted) => {
                     result.complete(Check::Registration);
@@ -390,23 +450,33 @@ where
 {
     let mut result = ScenarioResult::for_role(Role::Asm);
     let mut stage = "starting_scenario";
-    // Progress lives outside the cancellable future so every exit retains it.
-    let outcome = timeout_at(
-        deadline,
-        asm_steps(connection, deadline, &mut result, &mut stage),
-    )
-    .await;
+    // Progress lives outside the cancellable future so every exit retains it
+    // -- including a Ctrl-C, not just reaching the deadline: dropping the
+    // `asm_steps` future on either branch of this `select!` cannot discard
+    // `result`, since it's owned by this function's own stack frame, not by
+    // the future being raced and dropped.
+    let outcome = tokio::select! {
+        ctrl_c = tokio::signal::ctrl_c() => {
+            note_interrupted(&mut result.notes, ctrl_c);
+            None
+        }
+        outcome = timeout_at(
+            deadline,
+            asm_steps(connection, deadline, &mut result, &mut stage),
+        ) => Some(outcome),
+    };
     match outcome {
-        Ok(Err(error)) => result.record_error(stage, error),
-        Err(_) if connection.has_pending_write() => result.record_error(
+        None => {}
+        Some(Ok(Err(error))) => result.record_error(stage, error),
+        Some(Err(_)) if connection.has_pending_write() => result.record_error(
             stage,
             io::Error::new(
                 io::ErrorKind::TimedOut,
                 "run deadline expired with an unfinished write; connection must be closed",
             ),
         ),
-        Err(_) => note(&mut result.notes, "Reached the run's max runtime."),
-        Ok(Ok(())) => {}
+        Some(Err(_)) => note(&mut result.notes, "Reached the run's max runtime."),
+        Some(Ok(Ok(()))) => {}
     }
     // A heartbeat/optional wait may observe the same deadline before the outer timer.
     if result.operational_error.is_none() && connection.has_pending_write() {
@@ -433,20 +503,23 @@ where
 {
     // Disabled until the initial ordinary status is sent after registration.
     let mut next_status = None;
+    let mut shown_findings = 0;
     *stage = "send_registration";
     connection.register(fixtures::valid_registration()).await?;
+    stream_new_findings(connection.findings(), &mut shown_findings);
 
     loop {
         *stage = "receive_or_reply";
-        match asm_poll_with_heartbeat(
+        let poll_result = asm_poll_with_heartbeat(
             connection,
             deadline,
             "for a RegistrationAck",
             &mut next_status,
             stage,
         )
-        .await?
-        {
+        .await?;
+        stream_new_findings(connection.findings(), &mut shown_findings);
+        match poll_result {
             PollWait::Processed => match connection.take_event() {
                 Some(AsmEvent::RegistrationAccepted) => {
                     result.complete(Check::Registration);
@@ -478,6 +551,7 @@ where
     *stage = "send_status_report";
     let status = asm_status(connection.state(), System::Ok);
     connection.issue_status_report(status).await?;
+    stream_new_findings(connection.findings(), &mut shown_findings);
     next_status = Some(Instant::now() + Duration::from_secs_f32(fixtures::STATUS_INTERVAL_SECONDS));
 
     result.complete(Check::StatusReport);
@@ -511,6 +585,7 @@ where
             id: None,
         })
         .await?;
+    stream_new_findings(connection.findings(), &mut shown_findings);
 
     result.complete(Check::DetectionReport);
 
@@ -519,15 +594,16 @@ where
     // best-effort check, not something a timeout here should be a finding,
     // and short enough that it doesn't need a heartbeat of its own.
     let short_deadline = (Instant::now() + Duration::from_secs(2)).min(deadline);
-    match asm_poll_with_heartbeat(
+    let poll_result = asm_poll_with_heartbeat(
         connection,
         short_deadline,
         "for an optional Task",
         &mut next_status,
         stage,
     )
-    .await?
-    {
+    .await?;
+    stream_new_findings(connection.findings(), &mut shown_findings);
+    match poll_result {
         PollWait::Processed => {
             connection.take_event();
             note(
@@ -568,18 +644,20 @@ where
             additional_information: None,
         })
         .await?;
+    stream_new_findings(connection.findings(), &mut shown_findings);
 
     loop {
         *stage = "receive_or_reply";
-        match asm_poll_with_heartbeat(
+        let poll_result = asm_poll_with_heartbeat(
             connection,
             deadline,
             "for an AlertAck",
             &mut next_status,
             stage,
         )
-        .await?
-        {
+        .await?;
+        stream_new_findings(connection.findings(), &mut shown_findings);
+        match poll_result {
             PollWait::Processed => {
                 if let Some(AsmEvent::AlertAcknowledged {
                     alert_id: acknowledged_id,
@@ -615,6 +693,7 @@ where
     *stage = "send_goodbye";
     let goodbye = asm_status(connection.state(), System::Goodbye);
     connection.issue_status_report(goodbye).await?;
+    stream_new_findings(connection.findings(), &mut shown_findings);
     result.complete(Check::Goodbye);
     note(
         &mut result.notes,

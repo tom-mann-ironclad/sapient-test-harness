@@ -250,8 +250,9 @@ const MAX_DISPLAY_CHARS: usize = 500;
 /// embedding a newline that starts what looks like a new one. JSON output
 /// isn't affected: `serde_json` already escapes controls as `\uXXXX`,
 /// which stays inert literal text even if the raw JSON is later `cat`'d to
-/// a terminal.
-fn sanitize_for_terminal(text: &str) -> String {
+/// a terminal. `pub(crate)`: `scenario.rs` reuses this to sanitize findings
+/// streamed live to stderr, not just the final report.
+pub(crate) fn sanitize_for_terminal(text: &str) -> String {
     let mut sanitized = String::with_capacity(text.len());
     for ch in text.chars() {
         if ch.is_control() {

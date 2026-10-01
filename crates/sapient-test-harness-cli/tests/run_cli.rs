@@ -579,3 +579,149 @@ async fn peer_error_text_cannot_inject_terminal_control_sequences() {
     assert!(stdout.contains("\\u{1b}"), "got:\n{stdout}");
     assert!(stdout.contains("payload\\nPASS"), "got:\n{stdout}");
 }
+
+/// KI-026: a conformance finding must reach stderr the moment it's observed,
+/// not only in the final report -- proved by reading stderr incrementally
+/// and seeing the finding line before the run has any reason to end
+/// (registration is accepted, so nothing stops the exchange).
+#[tokio::test]
+async fn findings_are_streamed_to_stderr_as_they_are_observed() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &listener.local_addr().unwrap().to_string(),
+                "--max-runtime-secs",
+                "5",
+                "--format",
+                "json",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(matches!(receive(&mut peer).await, Content::Registration(_)));
+        // Accepted, but with a deliberately invalid envelope: the exchange
+        // continues (this doesn't end the run), but a real finding now
+        // exists that the old (buggy) behavior would only show at the end.
+        send(
+            &mut peer,
+            Content::RegistrationAck(RegistrationAck {
+                acceptance: Some(true),
+                ack_response_reason: vec![],
+            }),
+            true,
+        )
+        .await;
+
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        let seen = timeout(Duration::from_secs(3), async {
+            loop {
+                let line = stderr
+                    .next_line()
+                    .await
+                    .unwrap()
+                    .expect("a finding line before the process has any reason to exit");
+                if line.contains("sapient_message.node_id.invalid") {
+                    break line;
+                }
+            }
+        })
+        .await;
+        assert!(
+            seen.is_ok(),
+            "expected the finding on stderr well before the run ends"
+        );
+        drop(child);
+    })
+    .await
+    .expect("CLI must stream the finding within the test deadline");
+}
+
+/// KI-026: Ctrl-C (SIGINT) must not silently kill the run. Partial progress
+/// and any finding already observed before the interrupt must still be
+/// reported, and the process must not exit 0 (a cancelled run is never a
+/// pass) or 2 (this isn't an operational/harness failure).
+#[tokio::test]
+async fn ctrl_c_finalizes_a_report_with_partial_progress_and_findings_retained() {
+    timeout(Duration::from_secs(15), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &listener.local_addr().unwrap().to_string(),
+                "--max-runtime-secs",
+                "30",
+                "--format",
+                "json",
+            ])
+            .stdout(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(matches!(receive(&mut peer).await, Content::Registration(_)));
+        // Invalid envelope: a real finding exists before the interrupt,
+        // proving it survives -- not just that *some* report gets printed.
+        send(
+            &mut peer,
+            Content::RegistrationAck(RegistrationAck {
+                acceptance: Some(true),
+                ack_response_reason: vec![],
+            }),
+            true,
+        )
+        .await;
+        assert!(matches!(receive(&mut peer).await, Content::StatusReport(_)));
+
+        let pid = child.id().expect("child must still be running");
+        let status = Command::new("kill")
+            .args(["-INT", &pid.to_string()])
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success(), "failed to send SIGINT to the harness");
+
+        let output = child.wait_with_output().await.unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "an interrupted run is neither a pass (0) nor an operational failure (2)"
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["passed"], false);
+        assert_ne!(report["outcome"], "passed");
+        assert!(
+            report["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["status"] == "completed"),
+            "partial progress (at least Registration) must be retained, got: {report}"
+        );
+        assert!(
+            !report["findings"].as_array().unwrap().is_empty(),
+            "the finding already observed before the interrupt must not be lost, got: {report}"
+        );
+        assert!(
+            report["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n.as_str().unwrap().contains("Interrupted")),
+            "notes should record that the run was interrupted, got: {report}"
+        );
+    })
+    .await
+    .expect("an interrupted run must still finalize and exit within the test deadline");
+}
