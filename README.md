@@ -86,7 +86,7 @@ has no vendored `.proto` sources or descriptor-compilation step of its own.
 
 ## Conformance rule catalog
 
-[`RULES.md`](../RULES.md) lists every conformance rule this crate can
+[`RULES.md`](RULES.md) lists every conformance rule this crate can
 produce a finding for — rule ID, source file, and message — generated
 directly from `crates/sapient-conformance-core/src/validation/*.rs` by
 `scripts/generate-rules.sh`. Don't hand-edit it; rerun the script after
