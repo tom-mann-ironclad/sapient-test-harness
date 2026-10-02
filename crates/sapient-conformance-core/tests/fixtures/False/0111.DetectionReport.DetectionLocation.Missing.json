@@ -7,17 +7,6 @@
     "objectId": "01GGYFBAXH4VYRQYEX7S3XGK3H",
     "taskId": "01GGYFBAXHNV9DN0N74DFX2952",
     "state": "TestState",
-    "location": {
-      "x": 51.1739726374,
-      "y": -1.82237671048,
-      "z": 788,
-      "xError": 5,
-      "yError": 5,
-      "zError": 5,
-      "coordinateSystem": "LOCATION_COORDINATE_SYSTEM_UTM_M",
-      "datum": "LOCATION_DATUM_WGS84_E",
-      "utmZone": "30U"
-    },
     "detectionConfidence": 0.99,
     "trackInfo": [
       {
@@ -105,13 +94,6 @@
       "upRateError": 6.0
     },
     "colour": "Red",
-    "id": "01H4R63D7NVN8444Z5M77WEBY3",
-    "detectionLocation": {
-      "locationList": {
-        "locations": [
-
-        ]
-      }
-    }
+    "id": "01H4R63D7NVN8444Z5M77WEBY3"
   }
 }

@@ -26,6 +26,7 @@ pub fn selftest(format: OutputFormat) -> ExitCode {
 
     let mut total = 0usize;
     let mut mismatches = Vec::new();
+    let mut decode_only_failures = Vec::new();
 
     for (dir_name, expected_pass) in [("True", true), ("False", false)] {
         let Some(dir) = FIXTURES.get_dir(dir_name) else {
@@ -63,20 +64,23 @@ pub fn selftest(format: OutputFormat) -> ExitCode {
             // expected to fail -- a message that isn't even valid SAPIENT
             // JSON is certainly non-conformant -- so it only counts as a
             // mismatch when `expected_pass` disagrees, exactly like
-            // `tests/parity.rs`'s own rule.
-            let (actual_pass, reason) = match decode_sapient_message_json(json, &message_descriptor)
-            {
-                Ok(message) => {
-                    let outcome = validate_sapient_message(message);
-                    let reason = outcome
-                        .findings
-                        .first()
-                        .map(|finding| format!("[{}] {}", finding.rule_id, finding.message))
-                        .unwrap_or_default();
-                    (outcome.passed, reason)
-                }
-                Err(err) => (false, err.to_string()),
-            };
+            // `tests/parity.rs`'s own rule. It's recorded separately below
+            // regardless: unlike a genuine validator rejection, it
+            // doesn't confirm the specific rule this fixture is named for
+            // actually fires.
+            let (actual_pass, reason, decode_failed) =
+                match decode_sapient_message_json(json, &message_descriptor) {
+                    Ok(message) => {
+                        let outcome = validate_sapient_message(message);
+                        let reason = outcome
+                            .findings
+                            .first()
+                            .map(|finding| format!("[{}] {}", finding.rule_id, finding.message))
+                            .unwrap_or_default();
+                        (outcome.passed, reason, false)
+                    }
+                    Err(err) => (false, err.to_string(), true),
+                };
 
             if actual_pass != expected_pass {
                 mismatches.push(FixtureMismatch {
@@ -85,11 +89,13 @@ pub fn selftest(format: OutputFormat) -> ExitCode {
                     actual_pass,
                     reason,
                 });
+            } else if decode_failed && !expected_pass {
+                decode_only_failures.push(fixture);
             }
         }
     }
 
-    let report = SelftestReport::new(total, mismatches);
+    let report = SelftestReport::new(total, mismatches, decode_only_failures);
     match format {
         OutputFormat::Text => report.print_text(),
         OutputFormat::Json => report.print_json(),

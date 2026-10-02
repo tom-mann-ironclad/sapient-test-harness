@@ -216,6 +216,15 @@ pub struct SelftestReport {
     pub total: usize,
     pub passed: bool,
     pub mismatches: Vec<FixtureMismatch>,
+    /// Fixtures expected to fail that currently do so only because they
+    /// failed to *decode* as a `SapientMessage` at all -- not a
+    /// mismatch (a message that isn't even valid SAPIENT JSON is certainly
+    /// non-conformant, matching the legacy harness's own convention), but
+    /// this proves nothing about whether the specific rule the fixture is
+    /// named for actually fires, unlike one the validator itself rejects.
+    /// Always empty is the healthy state; a non-empty list here means a
+    /// bundled fixture needs attention even though `passed` is still true.
+    pub decode_only_failures: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -227,11 +236,16 @@ pub struct FixtureMismatch {
 }
 
 impl SelftestReport {
-    pub fn new(total: usize, mismatches: Vec<FixtureMismatch>) -> Self {
+    pub fn new(
+        total: usize,
+        mismatches: Vec<FixtureMismatch>,
+        decode_only_failures: Vec<String>,
+    ) -> Self {
         SelftestReport {
             total,
             passed: mismatches.is_empty(),
             mismatches,
+            decode_only_failures,
         }
     }
 
@@ -266,6 +280,19 @@ impl SelftestReport {
                     },
                     mismatch.reason,
                 );
+            }
+        }
+
+        if !self.decode_only_failures.is_empty() {
+            println!();
+            println!(
+                "NOTE: {} fixture(s) expected to fail did so only because they never decoded \
+                 as a SapientMessage -- this doesn't confirm the rule they're named for \
+                 actually fires:",
+                self.decode_only_failures.len()
+            );
+            for fixture in &self.decode_only_failures {
+                println!("  - {fixture}");
             }
         }
     }

@@ -170,7 +170,15 @@ fn validate_predicted_location(
         Some(PredictedLocationOneof::RangeBearing(range_bearing)) => {
             validate_range_bearing(range_bearing, rule_id_prefix)
         }
-        None => ValidationOutcome::pass(),
+        // Mirrors `validate_detection_report`'s own top-level
+        // `location_oneof` check: a `PredictedLocation` present at all but
+        // without an actual location or range-bearing in it says nothing
+        // usable -- every real fixture that includes a `predictionLocation`
+        // always populates this oneof.
+        None => ValidationOutcome::fail(
+            format!("{rule_id_prefix}.missing"),
+            "Predicted location or range-bearing must be specified in detection report.",
+        ),
     }
 }
 
@@ -305,17 +313,15 @@ fn validate_signal(signal: Signal) -> ValidationOutcome {
 }
 
 fn validate_derived_detection(derived_detection: DerivedDetection) -> ValidationOutcome {
-    if derived_detection.timestamp.is_some() {
-        let timestamp_validation = validate_timestamp(
-            derived_detection.timestamp,
-            "detection_report.derived_detection.timestamp.missing",
-            "Derived detection timestamp must be specified in detection report.",
-            "detection_report.derived_detection.timestamp.malformed",
-            "Derived detection timestamp is malformed in detection report.",
-        );
-        if !timestamp_validation.passed {
-            return timestamp_validation;
-        }
+    let timestamp_validation = validate_timestamp(
+        derived_detection.timestamp,
+        "detection_report.derived_detection.timestamp.missing",
+        "Derived detection timestamp must be specified in detection report.",
+        "detection_report.derived_detection.timestamp.malformed",
+        "Derived detection timestamp is malformed in detection report.",
+    );
+    if !timestamp_validation.passed {
+        return timestamp_validation;
     }
 
     let node_id_validation = crate::validation::common::validate_uuid_v4(
@@ -646,6 +652,35 @@ mod detection_report_validation_tests {
         );
     }
 
+    /// A `PredictedLocation` present with neither a `location` nor a
+    /// `rangeBearing` used to pass silently -- found via the
+    /// fixture-decode-gap investigation
+    /// (`0118.PredictedLocation.Location.Missing.json`), which exercised
+    /// exactly this and had always passed for the wrong reason (the
+    /// fixture itself failed to decode, for an unrelated reason, before
+    /// that was fixed too). Every real `True` fixture that includes a
+    /// `predictionLocation` always populates this oneof, matching
+    /// `DetectionReport`'s own top-level `location_oneof`, which was
+    /// already correctly mandatory.
+    #[test]
+    fn test_predicted_location_without_a_location_or_range_bearing_is_a_finding() {
+        assert_eq!(
+            ValidationOutcome::fail(
+                "detection_report.prediction_location.missing",
+                "Predicted location or range-bearing must be specified in detection report."
+            ),
+            validate_detection_report(DetectionReport {
+                prediction_location: Some(
+                    crate::bsi_flex_335_v2_0::detection_report::PredictedLocation {
+                        predicted_location_oneof: None,
+                        predicted_timestamp: None,
+                    }
+                ),
+                ..detection_report_with(vec![], None)
+            })
+        );
+    }
+
     /// Unit test to check that report IDs are correctly validated
     #[test]
     fn test_report_id_validation() {
@@ -952,6 +987,62 @@ mod detection_report_validation_tests {
                     up_rate_error: None,
                 }))
             ))
+        );
+    }
+
+    /// `validate_derived_detection` used to only call `validate_timestamp` at
+    /// all when a timestamp was already present, so a missing one silently
+    /// passed instead of producing the (already-defined, but previously
+    /// unreachable) `detection_report.derived_detection.timestamp.missing`
+    /// finding -- found via the fixture-decode-gap investigation
+    /// (`0129.DerivedDetection.Timestamp.Missing.json`), which exercised
+    /// exactly this and had always passed for the wrong reason (the fixture
+    /// itself failed to decode, for an unrelated reason, before that was
+    /// fixed too).
+    #[test]
+    fn test_derived_detection_timestamp_validation() {
+        use crate::bsi_flex_335_v2_0::detection_report::DerivedDetection;
+
+        let derived_detection_with_timestamp = |timestamp| DerivedDetection {
+            timestamp,
+            node_id: Some("a8654cdf-4328-47de-81fa-c495589e30c9".to_string()),
+            object_id: Some("01H1VV3VN40RV97CDFSXJB44K9".to_string()),
+        };
+
+        assert_eq!(
+            ValidationOutcome::fail(
+                "detection_report.derived_detection.timestamp.missing",
+                "Derived detection timestamp must be specified in detection report."
+            ),
+            validate_detection_report(DetectionReport {
+                derived_detection: vec![derived_detection_with_timestamp(None)],
+                ..detection_report_with(vec![], None)
+            })
+        );
+
+        assert_eq!(
+            ValidationOutcome::fail(
+                "detection_report.derived_detection.timestamp.malformed",
+                "Derived detection timestamp is malformed in detection report."
+            ),
+            validate_detection_report(DetectionReport {
+                derived_detection: vec![derived_detection_with_timestamp(Some(Timestamp {
+                    seconds: 0,
+                    nanos: -1,
+                }))],
+                ..detection_report_with(vec![], None)
+            })
+        );
+
+        assert_eq!(
+            ValidationOutcome::pass(),
+            validate_detection_report(DetectionReport {
+                derived_detection: vec![derived_detection_with_timestamp(Some(Timestamp {
+                    seconds: 1,
+                    nanos: 0,
+                }))],
+                ..detection_report_with(vec![], None)
+            })
         );
     }
 }

@@ -106,20 +106,18 @@
     },
     "colour": "Red",
     "id": "01H4R63D7NVN8444Z5M77WEBY3",
-    "detectionLocation": {
-      "rangeBearing": {
-        "elevation": 1.0,
-        "azimuth": 1.0,
-        "range": 12.0,
-        "horizontal_extent": 1.0,
-        "vertical_extent": 1.0,
-        "horizontal_extent_error": 0.2,
-        "vertical_extent_error": 0.2,
-        "elevation_error": 0.1,
-        "azimuth_error": 0.1,
-        "range_error": 0.1,
-        "coordinateSystem": "RANGE_BEARING_COORDINATE_SYSTEM_DEGREES_M"
-      }
+    "rangeBearing": {
+      "elevation": 1.0,
+      "azimuth": 1.0,
+      "range": 12.0,
+      "horizontal_extent": 1.0,
+      "vertical_extent": 1.0,
+      "horizontal_extent_error": 0.2,
+      "vertical_extent_error": 0.2,
+      "elevation_error": 0.1,
+      "azimuth_error": 0.1,
+      "range_error": 0.1,
+      "coordinateSystem": "RANGE_BEARING_COORDINATE_SYSTEM_DEGREES_M"
     }
   }
 }
