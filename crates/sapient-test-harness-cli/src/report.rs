@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use sapient_conformance_core::finding::{Finding, Severity};
+use sapient_conformance_core::finding::{Direction, Finding, Severity};
 use serde::Serialize;
 
 use crate::cli::Role;
@@ -21,17 +21,40 @@ pub enum RunOutcome {
     Incomplete,
 }
 
+/// Bumped on any change to `RunReport`'s serialized JSON shape that could
+/// break a downstream consumer (a field removed, renamed, or changing
+/// meaning/type), so a beta consumer parsing this report can
+/// detect an incompatible change instead of silently misreading a new
+/// shape. Adding a new field is compatible and doesn't need a bump.
+pub const REPORT_SCHEMA_VERSION: u32 = 1;
+
 /// User-facing run report combining protocol findings with scenario coverage.
 /// Construct with `new` to derive consistent `outcome` and `passed` values;
 /// callers should treat the finalized report as a snapshot.
 #[derive(Serialize)]
 pub struct RunReport {
+    /// See [`REPORT_SCHEMA_VERSION`].
+    pub report_schema_version: u32,
+    /// This binary's own version (`CARGO_PKG_VERSION`), so a report can be
+    /// matched back to the exact harness build that produced it.
+    pub harness_version: &'static str,
+    /// Node ID this run stamped on its own outgoing messages -- an explicit
+    /// `--node-id`, or the freshly generated default -- needed to correlate
+    /// this run's traffic against target-side logs.
+    pub harness_node_id: String,
     /// Role played by the harness, rather than the target.
     pub role: Role,
     /// Name of the bundled scenario suite that ran.
     pub suite: String,
     /// Configured connect address (ASM) or listen address (DMM).
     pub target: String,
+    /// Wall-clock start of the run, in milliseconds since the Unix epoch --
+    /// for correlating against target-side logs.
+    pub started_at_unix_millis: u64,
+    /// Wall-clock end of the run (report construction time), same units.
+    pub ended_at_unix_millis: u64,
+    /// `ended_at_unix_millis - started_at_unix_millis`, for convenience.
+    pub duration_millis: u64,
     /// Compatibility summary for CI: true exactly when outcome is Passed.
     pub passed: bool,
     /// Verdict derived from findings and check completion, with errors taking precedence.
@@ -50,11 +73,16 @@ pub struct RunReport {
 impl RunReport {
     /// Finalize a scenario: error findings yield Failed, otherwise unfinished
     /// checks or operational errors yield Incomplete, otherwise Passed.
-    /// Notes never affect the verdict.
+    /// Notes never affect the verdict. `started_at_unix_millis` is the
+    /// caller's own clock reading from when the run began (e.g. before
+    /// connecting); `ended_at_unix_millis` is read here, at construction.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         role: Role,
         suite: String,
         target: String,
+        harness_node_id: String,
+        started_at_unix_millis: u64,
         findings: Vec<Finding>,
         scenario: ScenarioResult,
     ) -> Self {
@@ -66,10 +94,17 @@ impl RunReport {
             RunOutcome::Passed
         };
         let passed = outcome == RunOutcome::Passed;
+        let ended_at_unix_millis = now_unix_millis();
         RunReport {
+            report_schema_version: REPORT_SCHEMA_VERSION,
+            harness_version: env!("CARGO_PKG_VERSION"),
+            harness_node_id,
             role,
             suite,
             target,
+            started_at_unix_millis,
+            ended_at_unix_millis,
+            duration_millis: ended_at_unix_millis.saturating_sub(started_at_unix_millis),
             passed,
             findings,
             outcome,
@@ -96,6 +131,10 @@ impl RunReport {
         println!(
             "sapient-harness run -- role={} suite={} target={}",
             self.role, self.suite, self.target
+        );
+        println!(
+            "harness_version={} harness_node_id={} duration={}ms",
+            self.harness_version, self.harness_node_id, self.duration_millis
         );
         println!();
         if self.passed {
@@ -131,10 +170,11 @@ impl RunReport {
             println!("{severity:?}:");
             for finding in group {
                 println!(
-                    "  [{}] {}: {}",
+                    "  [{}] {}: {}{}",
                     finding.rule_id,
                     finding.field_path,
-                    sanitize_for_terminal(&finding.message)
+                    sanitize_for_terminal(&finding.message),
+                    format_context_suffix(finding)
                 );
             }
         }
@@ -235,6 +275,34 @@ impl SelftestReport {
     }
 }
 
+/// Renders a `Finding`'s message-context suffix for the text report,
+/// e.g. `" (inbound #3 StatusReport)"`, or, when collapsed from
+/// several adjacent identical occurrences (see `sapient_session`'s
+/// `FindingLog`), `" (inbound #2..#51 StatusReport, repeated 50 times)"` --
+/// so two findings sharing a rule_id can still be told apart and matched
+/// back to a specific wire message. Empty when `finding.context` is `None`,
+/// which is always true for a `Finding` from bare single-message
+/// validation (outside any session, e.g. `send`/`selftest`).
+pub(crate) fn format_context_suffix(finding: &Finding) -> String {
+    let Some(context) = &finding.context else {
+        return String::new();
+    };
+    let direction = match context.direction {
+        Direction::Inbound => "inbound",
+        Direction::Outbound => "outbound",
+    };
+    match &finding.last_seen {
+        Some(last) if finding.occurrences > 1 => format!(
+            " ({direction} #{}..#{} {}, repeated {} times)",
+            context.sequence, last.sequence, context.message_type, finding.occurrences
+        ),
+        _ => format!(
+            " ({direction} #{} {})",
+            context.sequence, context.message_type
+        ),
+    }
+}
+
 /// Maximum characters of a single peer-influenced text-report line before
 /// it's truncated. Bounds display only -- `print_json`'s `Finding`s and
 /// `notes` retain the full text for diagnosis, since `serde_json` already
@@ -268,6 +336,17 @@ pub(crate) fn sanitize_for_terminal(text: &str) -> String {
     } else {
         sanitized
     }
+}
+
+/// Wall-clock time, in milliseconds since the Unix epoch, for
+/// [`RunReport::started_at_unix_millis`]/`ended_at_unix_millis`. Pre-1970
+/// system clocks (or any other `SystemTime::now` error) fall back to the
+/// epoch rather than panicking over a reporting detail.
+pub(crate) fn now_unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn print_json(report: &impl Serialize) {

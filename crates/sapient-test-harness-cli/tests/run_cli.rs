@@ -139,6 +139,21 @@ async fn complete_exchange_emits_passed_json_and_exits_zero() {
             .iter()
             .all(|c| c["status"] == "completed")
     );
+
+    // KI-025: report-level metadata for matching a report back to the
+    // exact harness build and run that produced it.
+    assert_eq!(json["report_schema_version"], 1);
+    assert_eq!(json["harness_version"], env!("CARGO_PKG_VERSION"));
+    let node_id = json["harness_node_id"].as_str().unwrap();
+    assert!(
+        uuid::Uuid::parse_str(node_id).is_ok(),
+        "expected a real UUID (the freshly generated default), got {node_id:?}"
+    );
+    let started = json["started_at_unix_millis"].as_u64().unwrap();
+    let ended = json["ended_at_unix_millis"].as_u64().unwrap();
+    let duration = json["duration_millis"].as_u64().unwrap();
+    assert!(started > 0 && ended >= started);
+    assert_eq!(duration, ended - started);
 }
 
 #[tokio::test]
@@ -163,7 +178,33 @@ async fn invalid_envelopes_are_reported_while_the_whole_exchange_continues() {
         "sapient_message.node_id.invalid",
         "sapient_message.destination_id.invalid",
     ] {
-        assert_eq!(findings.iter().filter(|f| f["rule_id"] == rule).count(), 2);
+        let matching: Vec<&serde_json::Value> =
+            findings.iter().filter(|f| f["rule_id"] == rule).collect();
+        assert_eq!(matching.len(), 2);
+        // KI-025: the same rule_id fires twice (once from the RegistrationAck,
+        // once from the later AlertAck) -- each occurrence must carry its own
+        // message context so the two are individually identifiable, not
+        // indistinguishable duplicates.
+        let sequences: Vec<_> = matching
+            .iter()
+            .map(|f| f["context"]["sequence"].as_u64().unwrap())
+            .collect();
+        assert_ne!(
+            sequences[0], sequences[1],
+            "two distinct messages' findings must not share a sequence number, got {matching:?}"
+        );
+        let message_types: Vec<_> = matching
+            .iter()
+            .map(|f| f["context"]["message_type"].as_str().unwrap())
+            .collect();
+        assert!(
+            message_types.contains(&"RegistrationAck") && message_types.contains(&"AlertAck"),
+            "expected one finding attributed to each message, got {matching:?}"
+        );
+        for f in &matching {
+            assert_eq!(f["context"]["direction"], "inbound");
+            assert!(f["context"]["occurred_at_unix_millis"].as_u64().unwrap() > 0);
+        }
     }
 }
 

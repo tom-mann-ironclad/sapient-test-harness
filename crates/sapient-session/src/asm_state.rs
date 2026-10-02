@@ -18,7 +18,7 @@ use sapient_conformance_core::{
         task::{Command as TaskCommand, Control, command::Command as TaskCommandKind},
         task_ack::TaskStatus,
     },
-    finding::{Finding, Severity},
+    finding::{Direction, Finding, MessageContext, Severity},
     validation::{
         alert_ack::validate_alert_ack, registration_ack::validate_registration_ack,
         sapient_message::validate_envelope, task::validate_task,
@@ -26,7 +26,7 @@ use sapient_conformance_core::{
 };
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
-use crate::finding_log::FindingLog;
+use crate::finding_log::{FindingLog, content_type_name, now_unix_millis};
 
 /// Progress from the most recently processed inbound message, consumed with
 /// [`AsmSession::take_event`]. Invalid or uncorrelated AlertAck payloads do not
@@ -100,6 +100,14 @@ pub struct AsmSession {
     /// Single-message progress slot, reset before decoding each inbound frame.
     /// Findings have separate retention; this slot is not an event queue.
     event: Option<AsmEvent>,
+    /// Count of inbound messages processed so far (KI-025), for
+    /// [`MessageContext::sequence`]. Independent of `outbound_sequence` --
+    /// inbound and outbound are separate streams.
+    inbound_sequence: u64,
+    /// Count of harness-initiated outbound messages that can produce a
+    /// finding issued so far (just `register()`, today), for
+    /// [`MessageContext::sequence`].
+    outbound_sequence: u64,
 }
 
 impl AsmSession {
@@ -111,6 +119,8 @@ impl AsmSession {
             findings: FindingLog::default(),
             current_raw: Vec::new(),
             event: None,
+            inbound_sequence: 0,
+            outbound_sequence: 0,
         }
     }
 
@@ -139,6 +149,13 @@ impl AsmSession {
     /// actually writing them to the connection.
     pub fn register(&mut self, registration: Registration) -> Vec<u8> {
         if !matches!(self.state, AsmSessionState::NotRegistered) {
+            self.outbound_sequence += 1;
+            self.findings.set_context(MessageContext {
+                sequence: self.outbound_sequence,
+                direction: Direction::Outbound,
+                message_type: "Registration".to_string(),
+                occurred_at_unix_millis: now_unix_millis(),
+            });
             self.findings.push(Finding {
                 rule_id: "session.registration.sent_twice".to_string(),
                 field_path: "session".to_string(),
@@ -149,6 +166,7 @@ impl AsmSession {
                           but the harness itself choosing to send a second one mid-test is \
                           almost always a scenario bug, not something to encode here)."
                     .to_string(),
+                ..Default::default()
             });
         }
 
@@ -165,16 +183,25 @@ impl AsmSession {
     pub fn on_bytes(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
         self.event = None;
         self.current_raw = raw.to_vec();
+        self.inbound_sequence += 1;
+        let occurred_at_unix_millis = now_unix_millis();
 
         let message = match SapientMessage::decode(raw) {
             Ok(message) => message,
             Err(err) => {
                 let registered = matches!(self.state, AsmSessionState::Registered(_));
+                self.findings.set_context(MessageContext {
+                    sequence: self.inbound_sequence,
+                    direction: Direction::Inbound,
+                    message_type: "undecodable".to_string(),
+                    occurred_at_unix_millis,
+                });
                 self.findings.push(Finding {
                     rule_id: "session.framing.undecodable".to_string(),
                     field_path: "session.framing".to_string(),
                     severity: Severity::Error,
                     message: format!("received bytes that don't decode as a SapientMessage: {err}"),
+                    ..Default::default()
                 });
                 return if registered {
                     let reply = self.error_reply(vec![format!(
@@ -187,14 +214,26 @@ impl AsmSession {
             }
         };
 
-        self.on_message(message).map(|reply| self.encode(reply))
+        self.on_message(message, occurred_at_unix_millis)
+            .map(|reply| self.encode(reply))
     }
 
     fn encode(&self, message: SapientMessage) -> Vec<u8> {
         message.encode_to_vec()
     }
 
-    fn on_message(&mut self, message: SapientMessage) -> Option<SapientMessage> {
+    fn on_message(
+        &mut self,
+        message: SapientMessage,
+        occurred_at_unix_millis: u64,
+    ) -> Option<SapientMessage> {
+        let content = message.content.clone();
+        self.findings.set_context(MessageContext {
+            sequence: self.inbound_sequence,
+            direction: Direction::Inbound,
+            message_type: content_type_name(&content).to_string(),
+            occurred_at_unix_millis,
+        });
         // Diagnostic by default: keep processing decoded content so this run can
         // expose payload and sequencing issues too. Envelope findings affect the
         // final verdict, not the existing reply/state-transition policy.
@@ -202,7 +241,6 @@ impl AsmSession {
         if self.peer_node_id.is_none() {
             self.peer_node_id = message.node_id.clone();
         }
-        let content = message.content.clone();
 
         match content {
             Some(Content::RegistrationAck(ack)) => self.handle_registration_ack(ack),
@@ -216,6 +254,7 @@ impl AsmSession {
                     field_path: "sapient_message.content".to_string(),
                     severity: Severity::Error,
                     message: "Content must be specified in sapient message.".to_string(),
+                    ..Default::default()
                 });
                 None
             }
@@ -235,6 +274,7 @@ impl AsmSession {
                     message: "Received a RegistrationAck before this session ever sent a \
                               Registration."
                         .to_string(),
+                    ..Default::default()
                 });
                 return None;
             }
@@ -246,6 +286,7 @@ impl AsmSession {
                     message: "Received an unprompted RegistrationAck while already registered; \
                               expected at most one per Registration sent."
                         .to_string(),
+                    ..Default::default()
                 });
                 return None;
             }
@@ -265,6 +306,7 @@ impl AsmSession {
                     "DMM rejected our Registration: {}",
                     ack.ack_response_reason.join("; ")
                 ),
+                ..Default::default()
             });
             self.event = Some(if ack.acceptance == Some(false) {
                 AsmEvent::RegistrationRejected
@@ -281,10 +323,11 @@ impl AsmSession {
         // accepted it). A resolution via the MODE_TYPE_PERMANENT fallback
         // is accepted (with a warning), not treated as that kind of bug --
         // see `active_mode` module docs for why.
-        let active_mode = match resolve_active_mode(&pending_registration.mode_definition) {
-            Ok((mode, ActiveModeSource::Explicit)) => mode,
-            Ok((mode, ActiveModeSource::PermanentNamedDefault)) => {
-                self.findings.push(Finding {
+        let active_mode =
+            match resolve_active_mode(&pending_registration.mode_definition) {
+                Ok((mode, ActiveModeSource::Explicit)) => mode,
+                Ok((mode, ActiveModeSource::PermanentNamedDefault)) => {
+                    self.findings.push(Finding {
                     rule_id: "session.registration.default_mode_via_permanent_name".to_string(),
                     field_path: "registration.mode_definition".to_string(),
                     severity: Severity::Warning,
@@ -294,12 +337,11 @@ impl AsmSession {
                          mode, matching the legacy DMM convention MODE_TYPE_DEFAULT was \
                          introduced to replace.",
                         mode.mode_name
-                    ),
-                });
-                mode
-            }
-            Ok((mode, ActiveModeSource::FirstPermanentMode)) => {
-                self.findings.push(Finding {
+                    ), ..Default::default() });
+                    mode
+                }
+                Ok((mode, ActiveModeSource::FirstPermanentMode)) => {
+                    self.findings.push(Finding {
                     rule_id: "session.registration.default_mode_via_first_permanent".to_string(),
                     field_path: "registration.mode_definition".to_string(),
                     severity: Severity::Warning,
@@ -309,42 +351,43 @@ impl AsmSession {
                          first declared MODE_TYPE_PERMANENT mode ({:?}) as the initial active \
                          mode.",
                         mode.mode_name
-                    ),
-                });
-                mode
-            }
-            Err(ActiveModeError::NoCandidate) => {
-                self.findings.push(Finding {
-                    rule_id: "session.registration.no_default_mode".to_string(),
-                    field_path: "registration.mode_definition".to_string(),
-                    severity: Severity::Error,
-                    message: "Our own Registration declared no mode with mode_type \
+                    ), ..Default::default() });
+                    mode
+                }
+                Err(ActiveModeError::NoCandidate) => {
+                    self.findings.push(Finding {
+                        rule_id: "session.registration.no_default_mode".to_string(),
+                        field_path: "registration.mode_definition".to_string(),
+                        severity: Severity::Error,
+                        message: "Our own Registration declared no mode with mode_type \
                               MODE_TYPE_DEFAULT and no mode with mode_type MODE_TYPE_PERMANENT \
                               to fall back to. This is a harness/test scenario bug (the DMM \
                               already accepted it), not something the peer did wrong."
-                        .to_string(),
-                });
-                self.event = Some(AsmEvent::RegistrationFailed);
-                self.state = AsmSessionState::NotRegistered;
-                return None;
-            }
-            Err(ActiveModeError::MultipleDefaultModes(count)) => {
-                self.findings.push(Finding {
-                    rule_id: "session.registration.multiple_default_modes".to_string(),
-                    field_path: "registration.mode_definition".to_string(),
-                    severity: Severity::Error,
-                    message: format!(
-                        "Our own Registration declared {count} modes with mode_type \
+                            .to_string(),
+                        ..Default::default()
+                    });
+                    self.event = Some(AsmEvent::RegistrationFailed);
+                    self.state = AsmSessionState::NotRegistered;
+                    return None;
+                }
+                Err(ActiveModeError::MultipleDefaultModes(count)) => {
+                    self.findings.push(Finding {
+                        rule_id: "session.registration.multiple_default_modes".to_string(),
+                        field_path: "registration.mode_definition".to_string(),
+                        severity: Severity::Error,
+                        message: format!(
+                            "Our own Registration declared {count} modes with mode_type \
                          MODE_TYPE_DEFAULT; exactly one is required. This is a harness/test \
                          scenario bug (the DMM already accepted it), not something the peer \
                          did wrong."
-                    ),
-                });
-                self.event = Some(AsmEvent::RegistrationFailed);
-                self.state = AsmSessionState::NotRegistered;
-                return None;
-            }
-        };
+                        ),
+                        ..Default::default()
+                    });
+                    self.event = Some(AsmEvent::RegistrationFailed);
+                    self.state = AsmSessionState::NotRegistered;
+                    return None;
+                }
+            };
 
         self.state = AsmSessionState::Registered(Box::new(RegisteredAsmContract {
             registration: pending_registration,
@@ -448,6 +491,7 @@ impl AsmSession {
                              {target_mode_name:?}, which we never declared in our own \
                              Registration's mode_definition list."
                         ),
+                        ..Default::default()
                     });
                     return Some(self.task_ack_reply(
                         task_id,
@@ -483,6 +527,7 @@ impl AsmSession {
                     "AlertAck references alert_id {alert_id:?}, which doesn't match any \
                      Alert this session sent that's still awaiting acknowledgement."
                 ),
+                ..Default::default()
             });
         } else {
             self.event = Some(AsmEvent::AlertAcknowledged { alert_id });
@@ -500,6 +545,7 @@ impl AsmSession {
                 "Peer sent an Error message about a packet it received: {}",
                 error.error_message.join("; ")
             ),
+            ..Default::default()
         });
         None
     }
@@ -513,6 +559,7 @@ impl AsmSession {
                       (e.g. Registration, StatusReport, DetectionReport, Alert, TaskAck are \
                       ASM-to-DMM messages)."
                 .to_string(),
+            ..Default::default()
         });
         None
     }
@@ -526,6 +573,7 @@ impl AsmSession {
                 "Received a {message_type} before our Registration was accepted; the DMM \
                  shouldn't send this yet."
             ),
+            ..Default::default()
         });
         None
     }

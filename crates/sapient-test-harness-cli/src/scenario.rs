@@ -92,11 +92,12 @@ fn note_interrupted(notes: &mut Vec<String>, ctrl_c: io::Result<()>) {
 fn stream_new_findings(findings: &[Finding], shown: &mut usize) {
     for finding in &findings[*shown..] {
         eprintln!(
-            "[{:?}] [{}] {}: {}",
+            "[{:?}] [{}] {}: {}{}",
             finding.severity,
             finding.rule_id,
             finding.field_path,
-            crate::report::sanitize_for_terminal(&finding.message)
+            crate::report::sanitize_for_terminal(&finding.message),
+            crate::report::format_context_suffix(finding)
         );
     }
     *shown = findings.len();

@@ -52,7 +52,15 @@ fn report(
     result: ScenarioResult,
     findings: Vec<sapient_conformance_core::finding::Finding>,
 ) -> RunReport {
-    RunReport::new(role, "v2.0".into(), "test".into(), findings, result)
+    RunReport::new(
+        role,
+        "v2.0".into(),
+        "test".into(),
+        "test-harness-node-id".into(),
+        0,
+        findings,
+        result,
+    )
 }
 
 fn check(report: &RunReport, expected: Check, status: CheckStatus) {

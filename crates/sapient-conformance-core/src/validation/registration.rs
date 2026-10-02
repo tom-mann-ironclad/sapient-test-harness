@@ -158,8 +158,10 @@ fn validate_status_definition(status_definition: StatusDefinition) -> Validation
             "Status interval must be specified in status definition.",
         );
     }
-    let valid_status_interval =
-        validate_status_interval(status_definition.status_interval.unwrap());
+    let valid_status_interval = validate_status_interval(
+        status_definition.status_interval.unwrap(),
+        "registration.status_definition.status_interval",
+    );
     if !valid_status_interval.passed {
         return valid_status_interval;
     }
@@ -203,47 +205,78 @@ fn validate_status_definition(status_definition: StatusDefinition) -> Validation
 }
 
 /// Function to check the status interval as specified in the BSI Flex 335 V2.0
-fn validate_status_interval(duration: Duration) -> ValidationOutcome {
+fn validate_status_interval(duration: Duration, rule_id_prefix: &str) -> ValidationOutcome {
     // Check the units
-    let duration_units = validate_duration_units(duration.units);
+    let duration_units = validate_duration_units(duration.units, rule_id_prefix);
     if !duration_units.passed {
         return duration_units;
     }
 
     // Check the value
-    validate_duration_value(duration.value)
+    validate_duration_value(duration.value, rule_id_prefix)
 }
 
 /// Function to check the duration units as specified in the BSI Flex 335 V2.0
 ///
 /// Shared by every `Duration`-typed field (status interval, mode settle
-/// time, region settle time, command completion time) -- the rule id
-/// identifies the check ("a duration needs units"), not which specific
-/// field embeds the `Duration`. See `src/finding.rs` for why this pass
-/// doesn't thread full per-field context through shared primitives.
-fn validate_duration_units(units: Option<i32>) -> ValidationOutcome {
+/// time, region settle time, command completion time) -- `rule_id_prefix`
+/// (the dotted path to whichever field actually embeds this `Duration`,
+/// e.g. `"registration.mode_definition.settle_time"`) is what lets a
+/// finding here identify which one failed (KI-025), the same pattern
+/// `common.rs`'s own composite validators (`validate_location` et al.) use.
+fn validate_duration_units(units: Option<i32>, rule_id_prefix: &str) -> ValidationOutcome {
     // `TimeUnits` is mandatory and has no reserved gaps (0-7).
     validate_required_enum(
         units,
         7,
-        "registration.duration.units.missing",
+        format!("{rule_id_prefix}.units.missing"),
         "Time Units must be specified.",
     )
 }
 
 /// Function to check the duration units as specified in the BSI Flex 335 V2.0
-fn validate_duration_value(value: Option<f32>) -> ValidationOutcome {
+fn validate_duration_value(value: Option<f32>, rule_id_prefix: &str) -> ValidationOutcome {
     match value {
         None => ValidationOutcome::fail(
-            "registration.duration.value.missing",
+            format!("{rule_id_prefix}.value.missing"),
             "Duration value must be provided.",
         ),
         Some(v) if !v.is_finite() || v < 0.0 => ValidationOutcome::fail(
-            "registration.duration.value.invalid",
+            format!("{rule_id_prefix}.value.invalid"),
             "Duration value must be a finite number 0 or greater.",
         ),
         Some(_) => ValidationOutcome::pass(),
     }
+}
+
+/// Rewrites every finding's `field_path` to insert `[index]` right after
+/// `segment`, identifying which entry of a `repeated` field failed -- e.g.
+/// for the field path built from segment `mode_definition` and field
+/// `mode_name`, index 2 turns `mode_definition.mode_name` into
+/// `mode_definition[2].mode_name` (KI-025). Only when `total` is more than
+/// 1: a single entry is already unambiguous, and leaving its `field_path`
+/// alone avoids a noisy, uninformative change for the overwhelmingly
+/// common single-mode registration. Cheap: a string rewrite of the
+/// already-built `field_path` after the fact, not threading an index
+/// parameter through every nested validator `validate_mode_definition` fans
+/// out to (`validate_mode_name`, `validate_settle_time`,
+/// `validate_mode_parameter`, ...) -- see `src/finding.rs`'s module docs
+/// for why this crate doesn't do that more generally yet.
+fn with_repeated_field_index(
+    mut outcome: ValidationOutcome,
+    segment: &str,
+    index: usize,
+    total: usize,
+) -> ValidationOutcome {
+    if total > 1 {
+        for finding in &mut outcome.findings {
+            finding.field_path =
+                finding
+                    .field_path
+                    .replacen(segment, &format!("{segment}[{index}]"), 1);
+        }
+    }
+    outcome
 }
 
 /// Function to check the mode definitions as specified in the BSI Flex 335 V2.0
@@ -284,8 +317,14 @@ fn validate_mode_definitions(mode_definitions: Vec<ModeDefinition>) -> Validatio
 
     let mut validations = vec![];
 
-    for mode_definition in mode_definitions {
-        validations.push(validate_mode_definition(mode_definition));
+    let total = mode_definitions.len();
+    for (index, mode_definition) in mode_definitions.into_iter().enumerate() {
+        validations.push(with_repeated_field_index(
+            validate_mode_definition(mode_definition),
+            "mode_definition",
+            index,
+            total,
+        ));
     }
 
     for validation in validations {
@@ -311,7 +350,10 @@ fn validate_mode_definition(mode_definition: ModeDefinition) -> ValidationOutcom
             "Settle time must be specified in mode definition.",
         );
     }
-    validations.push(validate_settle_time(mode_definition.settle_time.unwrap()));
+    validations.push(validate_settle_time(
+        mode_definition.settle_time.unwrap(),
+        "registration.mode_definition.settle_time",
+    ));
 
     for mode_parameter in mode_definition.mode_parameter {
         validations.push(validate_mode_parameter(mode_parameter));
@@ -345,15 +387,15 @@ fn validate_mode_name(mode_name: Option<String>) -> ValidationOutcome {
 }
 
 /// Function to check the settle time as specified in the BSI Flex 335 V2.0
-fn validate_settle_time(settle_time: Duration) -> ValidationOutcome {
+fn validate_settle_time(settle_time: Duration, rule_id_prefix: &str) -> ValidationOutcome {
     // Check the units
-    let duration_units = validate_duration_units(settle_time.units);
+    let duration_units = validate_duration_units(settle_time.units, rule_id_prefix);
     if !duration_units.passed {
         return duration_units;
     }
 
     // Check the value
-    validate_duration_value(settle_time.value)
+    validate_duration_value(settle_time.value, rule_id_prefix)
 }
 
 fn validate_mode_parameter(mode_parameter: ModeParameter) -> ValidationOutcome {
@@ -548,7 +590,8 @@ fn validate_region_definition(region_definition: RegionDefinition) -> Validation
     }
 
     if let Some(settle_time) = region_definition.settle_time {
-        let validation = validate_settle_time(settle_time);
+        let validation =
+            validate_settle_time(settle_time, "registration.region_definition.settle_time");
         if !validation.passed {
             return validation;
         }
@@ -911,7 +954,10 @@ fn validate_command_definition(command: Command) -> ValidationOutcome {
             "Command completion time must be specified.",
         );
     }
-    let completion_time_validation = validate_settle_time(command.completion_time.unwrap());
+    let completion_time_validation = validate_settle_time(
+        command.completion_time.unwrap(),
+        "registration.command.completion_time",
+    );
     if !completion_time_validation.passed {
         return completion_time_validation;
     }
@@ -1426,7 +1472,7 @@ mod registration_validation_tests {
         };
         assert_eq!(
             ValidationOutcome::fail(
-                "registration.duration.value.invalid",
+                "registration.status_definition.status_interval.value.invalid",
                 "Duration value must be a finite number 0 or greater."
             ),
             validate_status_definition(missing_value_status_definition)
@@ -1443,7 +1489,7 @@ mod registration_validation_tests {
         };
         assert_eq!(
             ValidationOutcome::pass(),
-            validate_status_interval(valid_duration)
+            validate_status_interval(valid_duration, "test.status_interval")
         );
 
         // missing units
@@ -1453,10 +1499,10 @@ mod registration_validation_tests {
         };
         assert_eq!(
             ValidationOutcome::fail(
-                "registration.duration.units.missing",
+                "test.status_interval.units.missing",
                 "Time Units must be specified."
             ),
-            validate_status_interval(missing_units_duration)
+            validate_status_interval(missing_units_duration, "test.status_interval")
         );
 
         // missing value
@@ -1466,10 +1512,10 @@ mod registration_validation_tests {
         };
         assert_eq!(
             ValidationOutcome::fail(
-                "registration.duration.value.missing",
+                "test.status_interval.value.missing",
                 "Duration value must be provided."
             ),
-            validate_status_interval(missing_value_duration)
+            validate_status_interval(missing_value_duration, "test.status_interval")
         );
     }
 
@@ -1478,16 +1524,19 @@ mod registration_validation_tests {
     fn test_duration_units_validation() {
         // valid units
         for i in 1..6 {
-            assert_eq!(ValidationOutcome::pass(), validate_duration_units(Some(i)));
+            assert_eq!(
+                ValidationOutcome::pass(),
+                validate_duration_units(Some(i), "test.duration")
+            );
         }
 
         // invalid units
         assert_eq!(
             ValidationOutcome::fail(
-                "registration.duration.units.missing",
+                "test.duration.units.missing",
                 "Time Units must be specified."
             ),
-            validate_duration_units(Some(0))
+            validate_duration_units(Some(0), "test.duration")
         );
     }
 
@@ -1498,26 +1547,26 @@ mod registration_validation_tests {
         for i in 0..500 {
             assert_eq!(
                 ValidationOutcome::pass(),
-                validate_duration_value(Some(i as f32))
+                validate_duration_value(Some(i as f32), "test.duration")
             );
         }
 
         // invalid values
         assert_eq!(
             ValidationOutcome::fail(
-                "registration.duration.value.invalid",
+                "test.duration.value.invalid",
                 "Duration value must be a finite number 0 or greater."
             ),
-            validate_duration_value(Some(-1.0))
+            validate_duration_value(Some(-1.0), "test.duration")
         );
 
         // missing values
         assert_eq!(
             ValidationOutcome::fail(
-                "registration.duration.value.missing",
+                "test.duration.value.missing",
                 "Duration value must be provided."
             ),
-            validate_duration_value(None)
+            validate_duration_value(None, "test.duration")
         );
     }
 
@@ -1714,6 +1763,30 @@ mod registration_validation_tests {
             ValidationOutcome::pass(),
             validate_mode_definitions(vec![mode("Default"), mode("Alternate")])
         );
+
+        // KI-025: when the *second* of several mode_definition entries is
+        // the one that fails, the finding's field_path must say so --
+        // "mode_definition[1]", not a bare "mode_definition" indistinguishable
+        // from a failure in the first entry.
+        let mut second_mode_unnamed = mode("Alternate");
+        second_mode_unnamed.mode_name = Some(String::new());
+        let outcome = validate_mode_definitions(vec![mode("Default"), second_mode_unnamed.clone()]);
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(
+            outcome.findings[0].rule_id,
+            "registration.mode_definition.mode_name.missing"
+        );
+        assert_eq!(
+            outcome.findings[0].field_path, "registration.mode_definition[1].mode_name",
+            "the second mode_definition's own field_path must carry its index"
+        );
+
+        // A single mode_definition is already unambiguous -- no index noise.
+        let single_mode_outcome = validate_mode_definitions(vec![second_mode_unnamed]);
+        assert_eq!(
+            single_mode_outcome.findings[0].field_path, "registration.mode_definition.mode_name",
+            "a lone entry needs no index to be identified"
+        );
     }
 
     /// Unit test to check that mode definitions are correctly validated
@@ -1878,7 +1951,7 @@ mod registration_validation_tests {
         };
         assert_eq!(
             ValidationOutcome::pass(),
-            validate_settle_time(valid_duration)
+            validate_settle_time(valid_duration, "test.settle_time")
         );
 
         // missing units
@@ -1888,10 +1961,10 @@ mod registration_validation_tests {
         };
         assert_eq!(
             ValidationOutcome::fail(
-                "registration.duration.units.missing",
+                "test.settle_time.units.missing",
                 "Time Units must be specified."
             ),
-            validate_settle_time(missing_units_duration)
+            validate_settle_time(missing_units_duration, "test.settle_time")
         );
 
         // invalid value
@@ -1901,10 +1974,93 @@ mod registration_validation_tests {
         };
         assert_eq!(
             ValidationOutcome::fail(
-                "registration.duration.value.invalid",
+                "test.settle_time.value.invalid",
                 "Duration value must be a finite number 0 or greater."
             ),
-            validate_settle_time(missing_value_duration)
+            validate_settle_time(missing_value_duration, "test.settle_time")
+        );
+    }
+
+    /// KI-025: the same shared duration validators back four different
+    /// `Duration`-typed fields (status interval, mode settle time, region
+    /// settle time, command completion time). Each must produce a rule ID
+    /// naming which one actually failed -- not a single generic
+    /// `"registration.duration.*"` shared by all four, which is what this
+    /// fixes.
+    #[test]
+    fn duration_findings_identify_their_containing_field() {
+        let invalid_units = Duration {
+            units: None,
+            value: Some(1.0),
+        };
+
+        let status_definition = StatusDefinition {
+            coverage_definition: None,
+            field_of_view_definition: None,
+            location_definition: None,
+            obscuration_definition: None,
+            status_report: vec![],
+            status_interval: Some(invalid_units),
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "registration.status_definition.status_interval.units.missing",
+                "Time Units must be specified."
+            ),
+            validate_status_definition(status_definition)
+        );
+
+        let mode_definition = ModeDefinition {
+            duration: None,
+            maximum_latency: None,
+            detection_definition: vec![],
+            mode_name: Some("Default".to_string()),
+            mode_parameter: vec![],
+            mode_description: None,
+            mode_type: Some(1),
+            scan_type: None,
+            settle_time: Some(invalid_units),
+            task: None,
+            tracking_type: None,
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "registration.mode_definition.settle_time.units.missing",
+                "Time Units must be specified."
+            ),
+            validate_mode_definition(mode_definition)
+        );
+
+        let region_definition = RegionDefinition {
+            region_type: vec![1],
+            region_area: vec![LocationType {
+                coordinates_oneof: Some(CoordinatesOneof::LocationUnits(1)),
+                datum_oneof: Some(DatumOneof::LocationDatum(1)),
+                zone: None,
+            }],
+            settle_time: Some(invalid_units),
+            behaviour_filter_definition: vec![],
+            class_filter_definition: vec![],
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "registration.region_definition.settle_time.units.missing",
+                "Time Units must be specified."
+            ),
+            validate_region_definition(region_definition)
+        );
+
+        let command = Command {
+            units: Some("m".to_string()),
+            completion_time: Some(invalid_units),
+            r#type: Some(1),
+        };
+        assert_eq!(
+            ValidationOutcome::fail(
+                "registration.command.completion_time.units.missing",
+                "Time Units must be specified."
+            ),
+            validate_command_definition(command)
         );
     }
 

@@ -1009,11 +1009,13 @@ fn repeated_identical_findings_are_collapsed_not_accumulated() {
         1,
         "50 identical failures should collapse into one entry, got {findings:?}"
     );
-    assert!(
-        findings[0].message.ends_with("(repeated 50 times)"),
-        "expected the repeat count in the message, got {:?}",
-        findings[0].message
-    );
+    assert_eq!(findings[0].occurrences, 50);
+    // KI-025: collapsing must not destroy which messages it spans -- the
+    // first and most recent occurrence are still individually identifiable.
+    // Sequence 1 is the Registration `register()` already sent; the 50
+    // identical StatusReports are inbound messages 2 through 51.
+    assert_eq!(findings[0].context.as_ref().map(|c| c.sequence), Some(2));
+    assert_eq!(findings[0].last_seen.as_ref().map(|c| c.sequence), Some(51));
 }
 
 #[test]

@@ -37,9 +37,6 @@ Every rule ID follows `<message_type>.<field>.<violation_kind>`, where `violatio
 | `registration.detection_report.category.missing` | Detection report category must be specified. |
 | `registration.detection_report.type.missing` | Detection report type must be specified. |
 | `registration.detection_report.units.missing` | Detection report units must be specified. |
-| `registration.duration.units.missing` | Time Units must be specified. |
-| `registration.duration.value.invalid` | Duration value must be a finite number 0 or greater. |
-| `registration.duration.value.missing` | Duration value must be provided. |
 | `registration.enu_velocity_units.east_north_rate_units.missing` | East/north rate units must be specified in velocity type. |
 | `registration.enu_velocity_units.up_rate_units.invalid` | Up rate units is not a valid option in velocity type. |
 | `registration.extension_subclass.subclass_name.missing` | Extension subclass name must be specified. |
@@ -89,6 +86,10 @@ Every rule ID follows `<message_type>.<field>.<violation_kind>`, where `violatio
 
 Rule ID prefixes passed to `common.rs`'s composite validators (each combines with a fixed suffix at runtime to build the real rule IDs):
 
+- `registration.status_definition.status_interval.*`
+- `registration.mode_definition.settle_time.*`
+- `registration.region_definition.settle_time.*`
+- `registration.command.completion_time.*`
 - `registration.reporting_region.*`
 
 ## `registration_ack.rs`
@@ -244,6 +245,7 @@ Each prefix above is combined with these suffixes by the named function (in `com
 - `task.rs::validate_parameter (local, not common.rs)`: .name.missing, .operator.missing, .value.missing
 - `detection_report.rs::validate_sub_class (local, not common.rs)`: .type.missing, .level.missing
 - `detection_report.rs::validate_track_object_info (local, not common.rs)`: .type.missing, .value.missing
+- `registration.rs::validate_duration_units / validate_duration_value (local, not common.rs; KI-025) -- shared by validate_status_interval and validate_settle_time, called with each of the four prefixes below`: .units.missing, .value.missing, .value.invalid
 
 ## Session-layer findings
 

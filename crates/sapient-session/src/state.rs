@@ -25,7 +25,7 @@ use sapient_conformance_core::{
         task::{Command as TaskCommand, command::Command as TaskCommandKind},
         task_ack::TaskStatus,
     },
-    finding::{Finding, Severity},
+    finding::{Direction, Finding, MessageContext, Severity},
     validation::{
         alert::validate_alert, detection_report::validate_detection_report,
         registration::validate_registration, sapient_message::validate_envelope,
@@ -34,7 +34,7 @@ use sapient_conformance_core::{
 };
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
-use crate::finding_log::FindingLog;
+use crate::finding_log::{FindingLog, content_type_name, now_unix_millis};
 
 /// Progress from the most recently processed message. These events let callers
 /// distinguish acknowledged work from state cleared by GoodBye/re-registration.
@@ -172,6 +172,13 @@ pub struct DmmSession {
     event: Option<DmmEvent>,
     /// See [`DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS`].
     allowed_status_report_intervals: u32,
+    /// Count of inbound messages processed so far (KI-025), for
+    /// [`MessageContext::sequence`]. Independent of `outbound_sequence` --
+    /// inbound and outbound are separate streams.
+    inbound_sequence: u64,
+    /// Count of harness-initiated outbound messages issued so far
+    /// (`issue_task`), for [`MessageContext::sequence`].
+    outbound_sequence: u64,
 }
 
 /// How many multiples of the declared `status_interval` a StatusReport gap
@@ -194,6 +201,8 @@ impl DmmSession {
             current_raw: Vec::new(),
             event: None,
             allowed_status_report_intervals: DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS,
+            inbound_sequence: 0,
+            outbound_sequence: 0,
         }
     }
 
@@ -230,16 +239,25 @@ impl DmmSession {
     pub fn on_bytes(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
         self.event = None;
         self.current_raw = raw.to_vec();
+        self.inbound_sequence += 1;
+        let occurred_at_unix_millis = now_unix_millis();
 
         let message = match SapientMessage::decode(raw) {
             Ok(message) => message,
             Err(err) => {
                 let registered = matches!(self.state, SessionState::Registered(_));
+                self.findings.set_context(MessageContext {
+                    sequence: self.inbound_sequence,
+                    direction: Direction::Inbound,
+                    message_type: "undecodable".to_string(),
+                    occurred_at_unix_millis,
+                });
                 self.findings.push(Finding {
                     rule_id: "session.framing.undecodable".to_string(),
                     field_path: "session.framing".to_string(),
                     severity: Severity::Error,
                     message: format!("received bytes that don't decode as a SapientMessage: {err}"),
+                    ..Default::default()
                 });
                 // Error is scoped to the post-Registration steady state.
                 // Pre-Registration, undecodable input just gets recorded,
@@ -255,21 +273,32 @@ impl DmmSession {
             }
         };
 
-        self.on_message(message).map(|reply| self.encode(reply))
+        self.on_message(message, occurred_at_unix_millis)
+            .map(|reply| self.encode(reply))
     }
 
     fn encode(&self, message: SapientMessage) -> Vec<u8> {
         message.encode_to_vec()
     }
 
-    fn on_message(&mut self, message: SapientMessage) -> Option<SapientMessage> {
+    fn on_message(
+        &mut self,
+        message: SapientMessage,
+        occurred_at_unix_millis: u64,
+    ) -> Option<SapientMessage> {
+        let content = message.content.clone();
+        self.findings.set_context(MessageContext {
+            sequence: self.inbound_sequence,
+            direction: Direction::Inbound,
+            message_type: content_type_name(&content).to_string(),
+            occurred_at_unix_millis,
+        });
         // Diagnostic by default: keep processing decoded content so this run can
         // expose payload and sequencing issues too. Envelope findings affect the
         // final verdict, not the existing reply/state-transition policy.
         self.findings.extend(validate_envelope(&message).findings);
         let peer_node_id = message.node_id.clone();
         let peer_timestamp = message.timestamp;
-        let content = message.content.clone();
 
         match content {
             Some(Content::Registration(registration)) => {
@@ -291,6 +320,7 @@ impl DmmSession {
                     field_path: "sapient_message.content".to_string(),
                     severity: Severity::Error,
                     message: "Content must be specified in sapient message.".to_string(),
+                    ..Default::default()
                 });
                 None
             }
@@ -335,6 +365,7 @@ impl DmmSession {
                          replace. Declare MODE_TYPE_DEFAULT explicitly to avoid this warning.",
                         mode.mode_name
                     ),
+                    ..Default::default()
                 });
                 mode
             }
@@ -351,6 +382,7 @@ impl DmmSession {
                          \"Default\", to avoid this warning.",
                         mode.mode_name
                     ),
+                    ..Default::default()
                 });
                 mode
             }
@@ -364,6 +396,7 @@ impl DmmSession {
                               mode with mode_type MODE_TYPE_PERMANENT, so the session has a \
                               starting mode."
                         .to_string(),
+                    ..Default::default()
                 });
                 self.state = SessionState::AwaitingRegistration;
                 self.event = Some(DmmEvent::RegistrationRejected);
@@ -385,6 +418,7 @@ impl DmmSession {
                         "Registration declares {count} modes with mode_type MODE_TYPE_DEFAULT; \
                          exactly one is required."
                     ),
+                    ..Default::default()
                 });
                 self.state = SessionState::AwaitingRegistration;
                 self.event = Some(DmmEvent::RegistrationRejected);
@@ -463,6 +497,7 @@ impl DmmSession {
                      tracked active mode (from Registration/mode_change tasks) is {:?}.",
                     contract.active_mode.mode_name
                 ),
+                ..Default::default()
             });
         }
 
@@ -505,6 +540,7 @@ impl DmmSession {
                                      previous one, exceeding the declared interval of \
                                      {declared_seconds:.3}s."
                                 ),
+                                ..Default::default()
                             });
                         }
                     }
@@ -531,6 +567,7 @@ impl DmmSession {
                                      ({allowed_seconds:.3}s of {declared_seconds:.3}s each).",
                                     self.allowed_status_report_intervals
                                 ),
+                                ..Default::default()
                             });
                         }
                     }
@@ -601,6 +638,7 @@ impl DmmSession {
                          detection_definition.location_type the active mode ({:?}) declared.",
                         contract.active_mode.mode_name
                     ),
+                    ..Default::default()
                 });
             }
         }
@@ -627,6 +665,7 @@ impl DmmSession {
                              detection_class_definition.",
                             contract.active_mode.mode_name
                         ),
+                        ..Default::default()
                     });
                 }
                 Some(declared_class) => {
@@ -697,6 +736,7 @@ impl DmmSession {
                 field_path: "task_ack.task_id".into(),
                 severity: Severity::Error,
                 message: format!("No outstanding task matches TaskAck task_id {task_id:?}."),
+                ..Default::default()
             });
             return None;
         };
@@ -708,6 +748,7 @@ impl DmmSession {
                 message: format!(
                     "Repeated {status:?} acknowledgement for task {task_id:?}; state unchanged."
                 ),
+                ..Default::default()
             });
             return None;
         }
@@ -725,8 +766,7 @@ impl DmmSession {
             self.findings.push(Finding {
                 rule_id: "session.task_ack.invalid_transition".into(),
                 field_path: "task_ack.task_status".into(), severity: Severity::Error,
-                message: format!("Task {task_id:?} cannot transition from {:?} to {status:?} under the harness lifecycle policy.", task.status),
-            });
+                message: format!("Task {task_id:?} cannot transition from {:?} to {status:?} under the harness lifecycle policy.", task.status), ..Default::default() });
             return None;
         }
         if let Some(mode) = &task.requested_mode {
@@ -796,6 +836,7 @@ impl DmmSession {
                 "Peer sent an Error message about a packet it received: {}",
                 error.error_message.join("; ")
             ),
+            ..Default::default()
         });
         None
     }
@@ -808,6 +849,7 @@ impl DmmSession {
             message: "Received a message type the DMM role never expects as inbound traffic \
                       (e.g. Task, AlertAck, RegistrationAck are DMM-to-ASM messages)."
                 .to_string(),
+            ..Default::default()
         });
         None
     }
@@ -821,6 +863,7 @@ impl DmmSession {
                 "Received a {message_type} before a successful Registration/RegistrationAck \
                  handshake; Registration must always come first."
             ),
+            ..Default::default()
         });
         // No reply: Error is scoped to the post-Registration steady state
         // and there's no established contract yet to build a
@@ -833,6 +876,13 @@ impl DmmSession {
     /// terminal `TaskAck` arrives. A mode request is stored separately and only
     /// activates on Accepted/Completed; merely sending it does not change modes.
     pub fn issue_task(&mut self, task: &Task) -> Vec<u8> {
+        self.outbound_sequence += 1;
+        self.findings.set_context(MessageContext {
+            sequence: self.outbound_sequence,
+            direction: Direction::Outbound,
+            message_type: "Task".to_string(),
+            occurred_at_unix_millis: now_unix_millis(),
+        });
         if let SessionState::Registered(contract) = &mut self.state {
             let mut requested_mode = None;
             if let Some(TaskCommand {
@@ -857,6 +907,7 @@ impl DmmSession {
                                  which isn't declared anywhere in the registration's \
                                  mode_definition list."
                             ),
+                            ..Default::default()
                         });
                     }
                 }
@@ -865,7 +916,7 @@ impl DmmSession {
                 if contract.tasks.contains_key(task_id) {
                     self.findings.push(Finding { rule_id: "session.task.duplicate_id".into(),
                         field_path: "task.task_id".into(), severity: Severity::Error,
-                        message: format!("Issued an already tracked task ID {task_id:?}; existing lifecycle retained.") });
+                        message: format!("Issued an already tracked task ID {task_id:?}; existing lifecycle retained."), ..Default::default() });
                 } else {
                     contract.outstanding_task_ids.insert(task_id.clone());
                     contract.tasks.insert(
@@ -884,6 +935,7 @@ impl DmmSession {
                 severity: Severity::Error,
                 message: "A Task was issued before any ASM had registered on this session."
                     .to_string(),
+                ..Default::default()
             });
         }
 
@@ -1005,6 +1057,7 @@ fn timestamp_reversed_finding(context: &str, seconds_before: f64) -> Finding {
             "StatusReport's timestamp is {seconds_before:.3}s before {context}'s timestamp; \
              the ASM's reported time must not go backwards."
         ),
+        ..Default::default()
     }
 }
 
@@ -1090,6 +1143,7 @@ fn validate_declared_subclasses(
                         "DetectionReport reports sub-class {sub_type:?} under {ancestry}, which \
                          the active mode ({mode_name:?}) never declared there."
                     ),
+                    ..Default::default()
                 });
             }
             Some(declared_sub) => {

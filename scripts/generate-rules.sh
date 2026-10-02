@@ -146,6 +146,12 @@ const PREFIX_SUFFIXES: &[(&str, &[&str])] = &[
         "detection_report.rs::validate_track_object_info (local, not common.rs)",
         &[".type.missing", ".value.missing"],
     ),
+    (
+        "registration.rs::validate_duration_units / validate_duration_value (local, not \
+         common.rs; KI-025) -- shared by validate_status_interval and validate_settle_time, \
+         called with each of the four prefixes below",
+        &[".units.missing", ".value.missing", ".value.invalid"],
+    ),
 ];
 
 struct Rule {

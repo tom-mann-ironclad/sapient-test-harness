@@ -21,6 +21,7 @@ use crate::report::RunReport;
 use crate::scenario::{run_asm_scenario, run_dmm_scenario};
 
 pub async fn run(args: RunArgs) -> ExitCode {
+    let started_at_unix_millis = crate::report::now_unix_millis();
     if args.suite != "v2.0" {
         eprintln!(
             "error: unknown suite {:?} -- only \"v2.0\" is bundled today (a pluggable \
@@ -86,6 +87,8 @@ pub async fn run(args: RunArgs) -> ExitCode {
         args.role,
         args.suite,
         args.target.to_string(),
+        harness_node_id,
+        started_at_unix_millis,
         findings,
         scenario,
     );
@@ -103,7 +106,12 @@ pub async fn run(args: RunArgs) -> ExitCode {
 /// harness's own outgoing messages should fail locally instead of letting
 /// a strict target reject the harness and look like a conformance failure.
 fn validate_harness_node_id(node_id: &str) -> io::Result<()> {
-    if validate_uuid_v4(Some(node_id), "run.node_id.invalid", "").passed {
+    // `validate_uuid_v4` needs a rule_id, but this check never surfaces one
+    // as a Finding -- only `.passed` is used, and this value is discarded.
+    // Deliberately not shaped like a real rule ID (no dot), so it doesn't
+    // read as a new, uncatalogued one to `scripts/generate-rules.sh`'s
+    // completeness sweep.
+    if validate_uuid_v4(Some(node_id), "harness_node_id_check", "").passed {
         Ok(())
     } else {
         Err(io::Error::new(
