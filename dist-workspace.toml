@@ -15,6 +15,11 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-pc-wind
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+# release.yml has a hand-added `validate` job, `if:` conditions, and SHA-pinned
+# `uses:` actions on top of what `dist generate` produces (see the comment at
+# the top of that job) -- these are permanent, deliberate drift, not staleness
+# to regenerate away, so CI is in the allow-dirty list.
+allow-dirty = ["ci"]
 
 [dist.github-custom-runners]
 global = "ubuntu-26.04"
