@@ -7,20 +7,36 @@ result."
 
 ## 1. Install
 
-There's no published crate or pre-built release binary yet. For now, build
-from source. You need a recent stable Rust toolchain 
-([rustup.rs](https://rustup.rs) if you don't have one).
+Pre-built binaries for Linux, macOS, and Windows (x86_64 and arm64) are
+attached to each [GitHub
+Release](https://github.com/tom-mann-ironclad/sapient-test-harness/releases).
+The current release is the `v1.0.0-beta.1` pre-release. The installers
+below place `sapient-harness` in `$CARGO_HOME/bin` (`~/.cargo/bin` by
+default).
+
+**Linux / macOS:**
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/tom-mann-ironclad/sapient-test-harness/releases/download/v1.0.0-beta.1/sapient-test-harness-cli-installer.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/tom-mann-ironclad/sapient-test-harness/releases/download/v1.0.0-beta.1/sapient-test-harness-cli-installer.ps1 | iex"
+```
+
+Alternatively, download the archive for your platform from the release
+page and extract `sapient-harness` yourself; each archive has a `.sha256`
+checksum alongside it.
+
+**From source** needs a recent stable Rust toolchain
+([rustup.rs](https://rustup.rs) if you don't have one):
 
 ```bash
 git clone https://github.com/tom-mann-ironclad/sapient-test-harness.git
 cd sapient-test-harness
-cargo build --release -p sapient-test-harness-cli
-```
-
-The binary is now at `target/release/sapient-harness`. Optionally install
-it onto your `PATH`:
-
-```bash
 cargo install --path crates/sapient-test-harness-cli
 ```
 

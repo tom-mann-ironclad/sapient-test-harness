@@ -1,0 +1,45 @@
+# Changelog
+
+## 1.0.0-beta.1
+
+First public pre-release of `sapient-harness`, an independent conformance
+test harness for SAPIENT / BSI Flex 335 v2.0. See
+[`QUICKSTART.md`](https://github.com/tom-mann-ironclad/sapient-test-harness/blob/v1.0.0-beta.1/QUICKSTART.md) to install and run it.
+
+### Commands
+
+- **`run`**: drives the bundled v2.0 scenario against a real Edge Node
+  (`--role dmm`) or C2 Node (`--role asm`) over TCP and reports `PASS`,
+  `FAIL`, or `INCOMPLETE`.
+  - `--format json` produces a versioned, machine-readable report.
+  - `-v` / `--verbose` prints a styled checklist.
+  - Exit codes are `0` for a pass, `1` for findings or an incomplete run,
+    and `2` for a harness or operational failure.
+- **`send`**: sends hand-crafted `SapientMessage` JSON files to a target,
+  including deliberately non-conformant ones, and prints its replies.
+- **`selftest`**: checks the harness's own validators against its 231
+  bundled fixtures. No network is needed.
+
+### Conformance checks
+
+- Per-message validation for every v2.0 message type, ported from the
+  legacy C# harness. Parity is checked against that harness's own
+  fixture set.
+- Session-level checks for both roles:
+  - registration handshake and rejection handling
+  - status-report cadence and monotonic timestamps
+  - detection and registration consistency
+  - task and alert correlation
+  - mode changes
+  - GoodBye handling
+- Every finding has a stable `rule_id`, listed in [`RULES.md`](https://github.com/tom-mann-ironclad/sapient-test-harness/blob/v1.0.0-beta.1/RULES.md).
+  Findings in reports carry message identity and repeat spans.
+
+### Operational
+
+- Connect, write, and overall run deadlines.
+- Configurable incoming frame-size limit, with a warning for large frames.
+- Ctrl-C produces a partial report.
+- Text output escapes peer-supplied content so it can't inject terminal
+  control sequences.
+- `--role asm` accepts hostnames as well as IP addresses.
