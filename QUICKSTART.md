@@ -10,7 +10,7 @@ result."
 Pre-built binaries for Linux, macOS, and Windows (x86_64 and arm64) are
 attached to each [GitHub
 Release](https://github.com/tom-mann-ironclad/sapient-test-harness/releases).
-The current release is the `v1.0.0-beta.1` pre-release. The installers
+The current release is the `v1.0.0-beta.2` pre-release. The installers
 below place `sapient-harness` in `$CARGO_HOME/bin` (`~/.cargo/bin` by
 default).
 
@@ -18,13 +18,13 @@ default).
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/tom-mann-ironclad/sapient-test-harness/releases/download/v1.0.0-beta.1/sapient-test-harness-cli-installer.sh | sh
+  https://github.com/tom-mann-ironclad/sapient-test-harness/releases/download/v1.0.0-beta.2/sapient-test-harness-cli-installer.sh | sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/tom-mann-ironclad/sapient-test-harness/releases/download/v1.0.0-beta.1/sapient-test-harness-cli-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/tom-mann-ironclad/sapient-test-harness/releases/download/v1.0.0-beta.2/sapient-test-harness-cli-installer.ps1 | iex"
 ```
 
 Alternatively, download the archive for your platform from the release

@@ -11,7 +11,8 @@ use std::{fs, path::Path};
 use libtest_mimic::{Arguments, Failed, Trial};
 use prost_reflect::MessageDescriptor;
 use sapient_conformance_core::{
-    fixture_json::sapient_message_descriptor, validation::sapient_message::validate_sapient_message,
+    fixture_json::{is_parse_only_fixture, sapient_message_descriptor},
+    validation::sapient_message::validate_sapient_message,
 };
 
 fn main() {
@@ -51,8 +52,9 @@ fn fixture_trials(
                     .unwrap_or("unknown")
             );
             let message_descriptor = message_descriptor.clone();
+            let parse_only = is_parse_only_fixture(&name);
             Trial::test(name, move || {
-                run_fixture(&path, expected, &message_descriptor)
+                run_fixture(&path, expected, parse_only, &message_descriptor)
             })
         })
         .collect()
@@ -61,22 +63,38 @@ fn fixture_trials(
 fn run_fixture(
     path: &Path,
     expected: bool,
+    parse_only: bool,
     message_descriptor: &MessageDescriptor,
 ) -> Result<(), Failed> {
     let json = fs::read_to_string(path)
         .map_err(|err| format!("failed to read fixture {}: {err}", path.display()))?;
 
-    // Mirrors the legacy harness's own test loop (`SapientServiceValidatorTests.TestMessage`):
-    // it parses each fixture with `SapientMessage.Parser.ParseJson`, and a parse failure
-    // (`InvalidProtocolBufferException`) is treated as an acceptable outcome for a "False"
-    // fixture -- a message that isn't even valid SAPIENT JSON is certainly non-conformant --
-    // but as a hard failure for a "True" fixture, which must both parse and validate.
+    // The legacy harness's own test loop (`SapientServiceValidatorTests.TestMessage`)
+    // accepts any parse failure for a "False" fixture. That's stricter here: a parse
+    // failure proves nothing about the rule a fixture is named for, so only fixtures
+    // listed in `PARSE_ONLY_FIXTURES` may fail that way, and every listed one must.
     let message = match sapient_conformance_core::fixture_json::decode_sapient_message_json(
         &json,
         message_descriptor,
     ) {
+        Ok(_) if parse_only => {
+            return Err(format!(
+                "fixture {} is listed in PARSE_ONLY_FIXTURES but decodes; remove it from the list",
+                path.display()
+            )
+            .into());
+        }
         Ok(message) => message,
-        Err(_) if !expected => return Ok(()),
+        Err(_) if !expected && parse_only => return Ok(()),
+        Err(err) if !expected => {
+            return Err(format!(
+                "fixture {} fails to parse as protobuf JSON, so it never reaches a validator \
+                 rule: {err}. Fix the fixture, or list it in PARSE_ONLY_FIXTURES if the \
+                 violation can only be expressed as a parse failure",
+                path.display()
+            )
+            .into());
+        }
         Err(err) => {
             return Err(format!(
                 "failed to parse fixture {} as protobuf JSON: {err}",

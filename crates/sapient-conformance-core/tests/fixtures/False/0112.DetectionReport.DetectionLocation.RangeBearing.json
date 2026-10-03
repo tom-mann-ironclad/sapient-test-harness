@@ -7,17 +7,6 @@
     "objectId": "01GGYFBAXH4VYRQYEX7S3XGK3H",
     "taskId": "01GGYFBAXHNV9DN0N74DFX2952",
     "state": "TestState",
-    "location": {
-      "x": 51.1739726374,
-      "y": -1.82237671048,
-      "z": 788,
-      "xError": 5,
-      "yError": 5,
-      "zError": 5,
-      "coordinateSystem": "LOCATION_COORDINATE_SYSTEM_UTM_M",
-      "datum": "LOCATION_DATUM_WGS84_E",
-      "utmZone": "30U"
-    },
     "detectionConfidence": 0.99,
     "trackInfo": [
       {
@@ -110,10 +99,6 @@
       "elevation": 1.0,
       "azimuth": 1.0,
       "range": 12.0,
-      "horizontal_extent": 1.0,
-      "vertical_extent": 1.0,
-      "horizontal_extent_error": 0.2,
-      "vertical_extent_error": 0.2,
       "elevation_error": 0.1,
       "azimuth_error": 0.1,
       "range_error": 0.1,

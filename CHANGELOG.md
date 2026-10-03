@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.0-beta.2
+
+### Fixed
+
+- Fixture `False/0112.DetectionReport.DetectionLocation.RangeBearing` now
+  decodes as v2.0. It used `RangeBearingCone` extent fields and set both
+  `location` and `rangeBearing`. It is now rejected by
+  `detection_report.location.datum.missing` rather than by a JSON parse
+  error.
+- `selftest` no longer reports decode-only failures. `False/0001.Timestamp.Error`
+  is documented as parse-only, because its `"AAA"` timestamp can't decode as
+  protobuf JSON. `sapient_message.timestamp.malformed` now has its own unit
+  test.
+
+### Changed
+
+- The fixture parity test now fails if a `False/` fixture is rejected only
+  because it can't be parsed, unless that fixture is listed in
+  `PARSE_ONLY_FIXTURES`.
+
 ## 1.0.0-beta.1
 
 First public pre-release of `sapient-harness`, an independent conformance

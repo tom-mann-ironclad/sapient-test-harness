@@ -17,6 +17,24 @@ use crate::bsi_flex_335_v2_0::SapientMessage;
 
 const SAPIENT_MESSAGE_TYPE: &str = "sapient_msg.bsi_flex_335_v2_0.SapientMessage";
 
+/// `False/` fixtures whose violation can only be expressed in JSON as a
+/// protobuf JSON parse failure, so they never reach a validator rule.
+/// Keyed by `<dir>::<file stem>`, as `tests/parity.rs` and `selftest` name
+/// fixtures. Any other `False/` fixture must decode and be rejected by a
+/// rule; `tests/parity.rs` fails if one doesn't, or if an entry here
+/// decodes.
+pub const PARSE_ONLY_FIXTURES: &[(&str, &str)] = &[(
+    "False::0001.Timestamp.Error",
+    "a non-RFC 3339 timestamp string cannot decode into google.protobuf.Timestamp; \
+     sapient_message.timestamp.malformed is covered by unit tests instead",
+)];
+
+/// Whether `fixture` (named `<dir>::<file stem>`) is listed in
+/// [`PARSE_ONLY_FIXTURES`].
+pub fn is_parse_only_fixture(fixture: &str) -> bool {
+    PARSE_ONLY_FIXTURES.iter().any(|(name, _)| *name == fixture)
+}
+
 #[derive(Debug)]
 pub enum DecodeError {
     Json(serde_json::Error),

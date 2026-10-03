@@ -218,6 +218,39 @@ mod sapient_message_validation_tests {
             validate_sapient_message(missing_timestamp)
         );
 
+        // The legacy `False/0001.Timestamp.Error` fixture's `"AAA"` can't
+        // decode, so malformed timestamps are only reachable from binary
+        // protobuf (out-of-range nanos or seconds), covered here instead.
+        for timestamp in [
+            Timestamp {
+                seconds: 1,
+                nanos: -1,
+            },
+            Timestamp {
+                seconds: 1,
+                nanos: 1_000_000_000,
+            },
+            Timestamp {
+                seconds: i64::MAX,
+                nanos: 0,
+            },
+        ] {
+            let malformed_timestamp = SapientMessage {
+                timestamp: Some(timestamp),
+                node_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                destination_id: None,
+                additional_information: None,
+                content: Some(Content::Registration(valid_registration())),
+            };
+            assert_eq!(
+                ValidationOutcome::fail(
+                    "sapient_message.timestamp.malformed",
+                    "Timestamp is malformed in sapient message."
+                ),
+                validate_sapient_message(malformed_timestamp)
+            );
+        }
+
         let invalid_node_id = SapientMessage {
             timestamp: Some(Timestamp {
                 seconds: 1,

@@ -11,7 +11,9 @@ use std::process::ExitCode;
 
 use include_dir::{Dir, include_dir};
 use sapient_conformance_core::{
-    fixture_json::{decode_sapient_message_json, sapient_message_descriptor},
+    fixture_json::{
+        decode_sapient_message_json, is_parse_only_fixture, sapient_message_descriptor,
+    },
     validation::sapient_message::validate_sapient_message,
 };
 
@@ -67,7 +69,8 @@ pub fn selftest(format: OutputFormat) -> ExitCode {
             // `tests/parity.rs`'s own rule. It's recorded separately below
             // regardless: unlike a genuine validator rejection, it
             // doesn't confirm the specific rule this fixture is named for
-            // actually fires.
+            // actually fires -- unless it's a documented `PARSE_ONLY_FIXTURES`
+            // entry, whose violation can't be expressed any other way.
             let (actual_pass, reason, decode_failed) =
                 match decode_sapient_message_json(json, &message_descriptor) {
                     Ok(message) => {
@@ -89,7 +92,7 @@ pub fn selftest(format: OutputFormat) -> ExitCode {
                     actual_pass,
                     reason,
                 });
-            } else if decode_failed && !expected_pass {
+            } else if decode_failed && !expected_pass && !is_parse_only_fixture(&fixture) {
                 decode_only_failures.push(fixture);
             }
         }
