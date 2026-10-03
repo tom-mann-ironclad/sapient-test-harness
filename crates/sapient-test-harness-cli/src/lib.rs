@@ -4,6 +4,7 @@
 //! crate's public library API, not a bin-only crate's private modules.
 
 pub mod cli;
+pub mod pretty;
 pub mod report;
 pub mod run;
 pub mod scenario;

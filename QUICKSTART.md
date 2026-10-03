@@ -86,6 +86,9 @@ pass/fail report. Useful flags:
   an ordinary observation deadline retains the existing completion verdict.
 - `--format json` -- machine-readable output for CI, on `stdout` only
   (progress messages go to `stderr`, so `stdout` stays clean JSON).
+- `-v` / `--verbose` -- render the final report as a styled checklist
+  (✓/✗ per scenario check, coloured when stdout is a terminal; set
+  `NO_COLOR` to disable). Text output only, not with `--format json`.
 - `--node-id <uuid>` -- override the random node ID the harness stamps on
   its own outgoing messages.
 

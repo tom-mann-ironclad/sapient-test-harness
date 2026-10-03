@@ -22,6 +22,12 @@ use crate::scenario::{run_asm_scenario, run_dmm_scenario};
 
 pub async fn run(args: RunArgs) -> ExitCode {
     let started_at_unix_millis = crate::report::now_unix_millis();
+    if args.verbose && args.format == OutputFormat::Json {
+        eprintln!(
+            "error: --verbose styles the text report and can't be combined with --format json"
+        );
+        return ExitCode::from(2);
+    }
     if args.suite != "v2.0" {
         eprintln!(
             "error: unknown suite {:?} -- only \"v2.0\" is bundled today (a pluggable \
@@ -93,6 +99,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
         scenario,
     );
     match args.format {
+        OutputFormat::Text if args.verbose => crate::pretty::print_verbose(&report),
         OutputFormat::Text => report.print_text(),
         OutputFormat::Json => report.print_json(),
     }

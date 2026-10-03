@@ -115,6 +115,11 @@ pub struct RunArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
 
+    /// Render the text report as a styled checklist (coloured when stdout
+    /// is a terminal and `NO_COLOR` is unset). Not valid with `--format json`.
+    #[arg(short, long)]
+    pub verbose: bool,
+
     /// How long to wait for the peer to connect (`--role dmm`) or for the
     /// outbound connection to establish (`--role asm`), in seconds.
     #[arg(long, default_value_t = 30)]
