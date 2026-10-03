@@ -23,3 +23,12 @@ allow-dirty = ["ci"]
 
 [dist.github-custom-runners]
 global = "ubuntu-26.04"
+
+# The installer otherwise assumes the build runner's glibc (2.35 on
+# ubuntu-22.04) and refuses glibc 2.34 systems such as RHEL/Rocky/Alma 9,
+# though the binaries only reference GLIBC_2.34 symbols. Re-check with
+# `readelf -V sapient-harness | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1`
+# if the build runners or dependencies change.
+[dist.min-glibc-version]
+x86_64-unknown-linux-gnu = "2.34"
+aarch64-unknown-linux-gnu = "2.34"

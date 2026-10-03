@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-beta.3
+
+### Fixed
+
+- The shell installer now accepts systems with glibc 2.34, such as
+  RHEL / Rocky / Alma 9. It previously required glibc 2.35, the build
+  runner's version, although the Linux binaries only need glibc 2.34. No
+  changes to the harness itself.
+
 ## 1.0.0-beta.2
 
 ### Fixed
