@@ -95,7 +95,9 @@ status reporting, a detection, a mode-change task, an alert) and prints a
 pass/fail report. Useful flags:
 
 - `--connect-timeout-secs <N>` (default 30) -- how long to wait for the
-  other side to connect.
+  other side to connect. With `--role asm`, a refused or failed connection
+  is retried every second until this runs out, so you can start the
+  harness before your C2 Node is listening.
 - `--max-runtime-secs <N>` (default 120) -- cap on all reads and writes once
   connected, including automatic replies and GoodBye. The connection closes at
   the end of the run. A deadline during a blocked write is an operational error;

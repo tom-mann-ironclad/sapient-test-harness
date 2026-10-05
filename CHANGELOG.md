@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `run --role asm` now retries a failed connection every second until
+  `--connect-timeout-secs` runs out, instead of failing on the first
+  refusal. An invalid `--target` address still fails immediately.
+
 ## 1.0.0-beta.3
 
 ### Fixed

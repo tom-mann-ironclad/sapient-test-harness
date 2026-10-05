@@ -13,12 +13,17 @@ use sapient_session::framing::FrameReader;
 use sapient_session::{asm::AsmConnection, dmm::DmmConnection};
 use tokio::io::split;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{Instant, timeout};
+use tokio::time::{Instant, sleep_until, timeout, timeout_at};
 
 use crate::cli::{OutputFormat, Role, RunArgs};
 use crate::completion::ScenarioResult;
 use crate::report::RunReport;
 use crate::scenario::{run_asm_scenario, run_dmm_scenario};
+
+/// Delay between `--role asm` connection attempts, so a harness started
+/// before the target is listening connects once it comes up rather than
+/// failing on the first refusal.
+const CONNECT_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 pub async fn run(args: RunArgs) -> ExitCode {
     let started_at_unix_millis = crate::report::now_unix_millis();
@@ -187,15 +192,7 @@ async fn run_as_asm(
     max_frame_bytes: u32,
 ) -> io::Result<(Vec<Finding>, ScenarioResult)> {
     eprintln!("Connecting to {target}...");
-    let stream = timeout(connect_timeout, TcpStream::connect(target))
-        .await
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("could not connect to {target} within {connect_timeout:?}"),
-            )
-        })??;
-    eprintln!("Connected.");
+    let stream = connect_with_retries(target, connect_timeout).await?;
 
     let (reader, writer) = split(stream);
     let mut connection = AsmConnection::with_frame_reader(
@@ -215,4 +212,63 @@ async fn run_as_asm(
     };
     let scenario = run_asm_scenario(&mut connection, deadline).await;
     Ok((connection.take_findings(), scenario))
+}
+
+/// Connects to `target`, retrying every [`CONNECT_RETRY_INTERVAL`] until
+/// `connect_timeout` has elapsed in total. That deadline also bounds each
+/// attempt, so a hung attempt can't overrun it. An unparseable target
+/// (`InvalidInput`) fails at once, since retrying can't fix it. On giving
+/// up, the error keeps the last attempt's kind (e.g. `ConnectionRefused`),
+/// or `TimedOut` if the final attempt was still pending at the deadline.
+async fn connect_with_retries(target: &str, connect_timeout: Duration) -> io::Result<TcpStream> {
+    // `None` only for a timeout too large to represent: no deadline at all.
+    let deadline = Instant::now().checked_add(connect_timeout);
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        let attempt = match deadline {
+            Some(deadline) => timeout_at(deadline, TcpStream::connect(target)).await,
+            None => Ok(TcpStream::connect(target).await),
+        };
+        let error = match attempt {
+            Ok(Ok(stream)) => {
+                if attempts > 1 {
+                    eprintln!("Connected after {attempts} attempts.");
+                } else {
+                    eprintln!("Connected.");
+                }
+                return Ok(stream);
+            }
+            Ok(Err(error)) if error.kind() == io::ErrorKind::InvalidInput => return Err(error),
+            Ok(Err(error)) => error,
+            Err(_elapsed) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "could not connect to {target} within {connect_timeout:?} \
+                         ({attempts} attempt(s); the last was still pending)"
+                    ),
+                ));
+            }
+        };
+
+        if attempts == 1 {
+            eprintln!(
+                "Could not connect to {target} ({error}); retrying every {}s for up to {connect_timeout:?}...",
+                CONNECT_RETRY_INTERVAL.as_secs()
+            );
+        }
+        let next_attempt = Instant::now() + CONNECT_RETRY_INTERVAL;
+        let wake = deadline.map_or(next_attempt, |deadline| next_attempt.min(deadline));
+        sleep_until(wake).await;
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "could not connect to {target} within {connect_timeout:?} \
+                     ({attempts} attempt(s); last error: {error})"
+                ),
+            ));
+        }
+    }
 }

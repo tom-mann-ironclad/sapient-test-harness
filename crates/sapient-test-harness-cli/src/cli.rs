@@ -121,7 +121,9 @@ pub struct RunArgs {
     pub verbose: bool,
 
     /// How long to wait for the peer to connect (`--role dmm`) or for the
-    /// outbound connection to establish (`--role asm`), in seconds.
+    /// outbound connection to establish (`--role asm`), in seconds. For
+    /// `--role asm`, a failed attempt (e.g. refused because the target
+    /// isn't listening yet) is retried every second within this time.
     #[arg(long, default_value_t = 30)]
     pub connect_timeout_secs: u64,
 

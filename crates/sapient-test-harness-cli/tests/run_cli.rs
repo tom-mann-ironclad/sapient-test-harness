@@ -766,3 +766,84 @@ async fn ctrl_c_finalizes_a_report_with_partial_progress_and_findings_retained()
     .await
     .expect("an interrupted run must still finalize and exit within the test deadline");
 }
+
+/// `--role asm` started before its target is listening: the first attempt
+/// is refused, and a retry must connect once the target comes up, rather
+/// than the run failing on the first refusal.
+#[tokio::test]
+async fn asm_role_retries_until_the_target_starts_listening() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+
+    timeout(Duration::from_secs(15), async {
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &address.to_string(),
+                "--connect-timeout-secs",
+                "10",
+                "--max-runtime-secs",
+                "5",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        // Long enough for at least one refused attempt before listening.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let listener = TcpListener::bind(address).await.unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(matches!(receive(&mut peer).await, Content::Registration(_)));
+        drop(child);
+    })
+    .await
+    .expect("the harness must connect once the target starts listening");
+}
+
+/// A target that never listens: retries stop at `--connect-timeout-secs`,
+/// reporting a `connect`-stage error that keeps the refusal's kind.
+#[tokio::test]
+async fn asm_role_gives_up_retrying_at_the_connect_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+
+    let started = std::time::Instant::now();
+    let output = timeout(
+        Duration::from_secs(10),
+        Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "run",
+                "--role",
+                "asm",
+                "--target",
+                &address,
+                "--connect-timeout-secs",
+                "2",
+                "--format",
+                "json",
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("retries must stop at the connect timeout")
+    .unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "gave up before the connect timeout: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["outcome"], "incomplete");
+    assert_eq!(report["operational_error"]["stage"], "connect");
+    assert_eq!(report["operational_error"]["kind"], "ConnectionRefused");
+    let message = report["operational_error"]["message"].as_str().unwrap();
+    assert!(message.contains("attempt(s)"), "{message}");
+}
