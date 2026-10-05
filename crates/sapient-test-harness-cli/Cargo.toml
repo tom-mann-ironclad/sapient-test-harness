@@ -16,7 +16,7 @@ name = "sapient-harness"
 path = "src/main.rs"
 
 [package.metadata.dist]
-include = ["../../RULES.md"]
+include = ["../../RULES.md", "../../QUICKSTART.md", "../../examples"]
 
 [dependencies]
 sapient-conformance-core.workspace = true

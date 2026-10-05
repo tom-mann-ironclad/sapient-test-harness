@@ -7,6 +7,9 @@
 - `run --role asm` now retries a failed connection every second until
   `--connect-timeout-secs` runs out, instead of failing on the first
   refusal. An invalid `--target` address still fails immediately.
+- Release archives now include `QUICKSTART.md` and `examples/messages/`,
+  so the quick start, including its `send` examples, works from a download
+  without the repository.
 
 ## 1.0.0-beta.3
 

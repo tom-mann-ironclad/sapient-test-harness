@@ -47,7 +47,7 @@ that loads 231 fixtures copied from the legacy harness's own
 asserts this crate's validators agree with the reference C# validator's
 recorded pass/fail outcome for each one. Add a fixture file to extend
 coverage, not new Rust — see
-[`tests/fixtures/README.md`](crates/sapient-conformance-core/tests/fixtures/README.md).
+[`tests/fixtures/README.md`](https://github.com/tom-mann-ironclad/sapient-test-harness/blob/main/crates/sapient-conformance-core/tests/fixtures/README.md).
 
 ## Conformance rule catalog
 
