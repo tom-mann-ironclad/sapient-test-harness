@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "sapient-conformance-core"
-version = "1.0.0-beta.4"
+version = "1.0.0-beta.5"
 dependencies = [
  "libtest-mimic",
  "proptest",
@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "sapient-session"
-version = "1.0.0-beta.4"
+version = "1.0.0-beta.5"
 dependencies = [
  "prost 0.14.4",
  "prost-types 0.14.4",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "sapient-test-harness-cli"
-version = "1.0.0-beta.4"
+version = "1.0.0-beta.5"
 dependencies = [
  "clap",
  "include_dir",
