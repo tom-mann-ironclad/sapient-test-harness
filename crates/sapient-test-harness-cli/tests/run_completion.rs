@@ -1078,11 +1078,12 @@ async fn delayed_fragmented_ack_keeps_status_cadence_and_current_mode() {
         let header = (ack.len() as u32).to_le_bytes();
         peer.write_all(&header[..2]).await.unwrap();
         let mut last_id = initial.report_id;
-        for seconds in [5, 10] {
+        // Periodic reports go out at 90% of the 5s declared interval.
+        for millis in [4500, 9000] {
             let Content::StatusReport(status) = validated(&mut peer).await else {
                 panic!("periodic status");
             };
-            assert_eq!(Instant::now() - start, Duration::from_secs(seconds));
+            assert_eq!(Instant::now() - start, Duration::from_millis(millis));
             assert_eq!(status.system, Some(1));
             assert_eq!(status.mode.as_deref(), Some("Alternate"));
             assert_ne!(status.report_id, last_id);

@@ -10,5 +10,7 @@ pub mod run;
 pub mod scenario;
 pub mod selftest;
 pub mod send;
+pub mod session;
+mod terminal;
 
 pub mod completion;

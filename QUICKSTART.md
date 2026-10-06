@@ -344,7 +344,63 @@ A write timeout closes the connection and exits 2; subsequent files are not sent
 has been sent, `2` on a harness-level failure) -- read the printed replies
 and warnings yourself.
 
-## 7. Reporting bugs
+## 7. Keeping a session open
+
+`run` drives one fixed scenario and then disconnects. To keep a connection
+up and drive it by hand instead, as you would with the legacy harness, use
+`session`. It registers (as an Edge Node) or accepts a registration (as a
+C2 Node), then stays connected until you quit, the other side disconnects,
+or you press Ctrl-C:
+
+```bash
+sapient-harness session --role asm --target your-c2-node-host:5000
+sapient-harness session --role dmm --target <C2 IP Address>:5000
+```
+
+While it runs, the harness:
+
+- logs every message in both directions with a UTC timestamp, including the
+  replies it sends automatically (`RegistrationAck`, `TaskAck`, `AlertAck`,
+  `Error`);
+- validates everything it receives and prints each finding as it happens,
+  including every repeat of the same finding;
+- as an Edge Node, sends a `StatusReport` every 4.5 seconds, inside the 5
+  second interval it registers. Add `--detection-interval-secs <N>` to also
+  send the scripted `DetectionReport` every N seconds.
+
+Type commands into the terminal while it runs (`help` lists them):
+
+| Role | Command | Sends |
+|---|---|---|
+| Edge Node (`asm`) | `detection` | the scripted `DetectionReport` |
+| | `alert` | the scripted `Alert` (its `AlertAck` is matched and logged) |
+| | `status` | a `StatusReport` now |
+| | `send <file>` | a `DetectionReport`, `Alert`, or `StatusReport` from a file |
+| | `quit` | a GoodBye `StatusReport`, then ends the session |
+| C2 Node (`dmm`) | `task [mode]` | a `mode_change` `Task`, to `mode` or another registered mode |
+| | `send <file>` | a `Task` from a file |
+| | `quit` | ends the session |
+
+`send <file>` takes the same JSON files as the `send` command, for example
+`send examples/messages/from-edge-node/03-detection-report.json`. Only the
+message content is used: the harness sets the timestamp and its own node ID,
+and gives each report, alert, or task a new ID, so you can send the same file
+again. A `DetectionReport`'s object ID is kept, so resending it reports the
+same object. Each message is checked against the harness's own rules first,
+with a warning if it fails, and is sent anyway.
+
+In a terminal, commands are typed at a `> ` prompt that stays below the log,
+so incoming messages never split what you're typing. Up/Down recall earlier
+commands, Tab completes file paths for `send`, and Ctrl-C or Ctrl-D ends the
+session as `quit` does.
+
+Commands can also be piped in, e.g. from a script. When stdin closes the
+session keeps running until Ctrl-C or a disconnect.
+
+`session` exits `0` if no error findings were recorded, `1` if any were, and
+`2` for a harness-level failure such as a connection or write error.
+
+## 8. Reporting bugs
 
 For now, open an issue on GitHub:
 <https://github.com/tom-mann-ironclad/sapient-test-harness/issues>

@@ -30,9 +30,10 @@ A Cargo workspace of three crates:
   message validation and adding session-level sequencing, timing, and
   cross-message correlation a single-message validator can't check.
 - **`crates/sapient-test-harness-cli`** — the `sapient-harness` binary:
-  `run` drives a bundled scenario against a real target over TCP, `send`
-  fires hand-crafted messages at one without session tracking, `selftest`
-  checks the harness's own validators against its bundled fixture set.
+  `run` drives a bundled scenario against a real target over TCP, `session`
+  keeps a live, manually driven session open with one, `send` fires
+  hand-crafted messages at one without session tracking, `selftest` checks
+  the harness's own validators against its bundled fixture set.
 
 Each crate's own module docs (`cargo doc --open`) cover its internals in
 depth — session event semantics, framing/cancellation behavior, report

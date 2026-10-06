@@ -108,6 +108,11 @@ pub struct AsmSession {
     /// finding issued so far (just `register()`, today), for
     /// [`MessageContext::sequence`].
     outbound_sequence: u64,
+    /// Context of the most recent inbound message, for [`Self::last_inbound`].
+    last_inbound: Option<MessageContext>,
+    /// Content type of the automatic reply to the most recent inbound
+    /// message, if one was produced, for [`Self::last_reply`].
+    last_reply: Option<&'static str>,
 }
 
 impl AsmSession {
@@ -121,6 +126,8 @@ impl AsmSession {
             event: None,
             inbound_sequence: 0,
             outbound_sequence: 0,
+            last_inbound: None,
+            last_reply: None,
         }
     }
 
@@ -128,6 +135,19 @@ impl AsmSession {
     /// at most once, and each new inbound frame replaces any unconsumed event.
     pub fn take_event(&mut self) -> Option<AsmEvent> {
         self.event.take()
+    }
+
+    /// Type, sequence number and receipt time of the most recently received
+    /// message (`"undecodable"` if it didn't decode), or `None` before the
+    /// first. Unlike [`Self::take_event`], every inbound message updates it.
+    pub fn last_inbound(&self) -> Option<&MessageContext> {
+        self.last_inbound.as_ref()
+    }
+
+    /// Content type (e.g. `"TaskAck"`) of the automatic reply produced for the
+    /// most recent inbound message, or `None` if it needed no reply.
+    pub fn last_reply(&self) -> Option<&'static str> {
+        self.last_reply
     }
 
     pub fn state(&self) -> &AsmSessionState {
@@ -182,6 +202,7 @@ impl AsmSession {
     /// decode/validation failure).
     pub fn on_bytes(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
         self.event = None;
+        self.last_reply = None;
         self.current_raw = raw.to_vec();
         self.inbound_sequence += 1;
         let occurred_at_unix_millis = now_unix_millis();
@@ -190,7 +211,7 @@ impl AsmSession {
             Ok(message) => message,
             Err(err) => {
                 let registered = matches!(self.state, AsmSessionState::Registered(_));
-                self.findings.set_context(MessageContext {
+                self.set_inbound_context(MessageContext {
                     sequence: self.inbound_sequence,
                     direction: Direction::Inbound,
                     message_type: "undecodable".to_string(),
@@ -207,7 +228,7 @@ impl AsmSession {
                     let reply = self.error_reply(vec![format!(
                         "failed to decode received packet as a SapientMessage: {err}"
                     )]);
-                    Some(self.encode(reply))
+                    Some(self.encode_reply(reply))
                 } else {
                     None
                 };
@@ -215,11 +236,24 @@ impl AsmSession {
         };
 
         self.on_message(message, occurred_at_unix_millis)
-            .map(|reply| self.encode(reply))
+            .map(|reply| self.encode_reply(reply))
     }
 
     fn encode(&self, message: SapientMessage) -> Vec<u8> {
         message.encode_to_vec()
+    }
+
+    /// Encode an automatic reply, recording its type for [`Self::last_reply`].
+    fn encode_reply(&mut self, reply: SapientMessage) -> Vec<u8> {
+        self.last_reply = Some(content_type_name(&reply.content));
+        self.encode(reply)
+    }
+
+    /// Stamp findings with an inbound message's context and remember it for
+    /// [`Self::last_inbound`].
+    fn set_inbound_context(&mut self, context: MessageContext) {
+        self.last_inbound = Some(context.clone());
+        self.findings.set_context(context);
     }
 
     fn on_message(
@@ -228,7 +262,7 @@ impl AsmSession {
         occurred_at_unix_millis: u64,
     ) -> Option<SapientMessage> {
         let content = message.content.clone();
-        self.findings.set_context(MessageContext {
+        self.set_inbound_context(MessageContext {
             sequence: self.inbound_sequence,
             direction: Direction::Inbound,
             message_type: content_type_name(&content).to_string(),

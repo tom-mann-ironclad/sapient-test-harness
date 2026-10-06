@@ -3,7 +3,7 @@
 
 use clap::Parser;
 use sapient_test_harness_cli::cli::{Cli, Command};
-use sapient_test_harness_cli::{run, selftest, send};
+use sapient_test_harness_cli::{run, selftest, send, session};
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
@@ -12,5 +12,6 @@ async fn main() -> std::process::ExitCode {
         Command::Run(args) => run::run(args).await,
         Command::Selftest(args) => selftest::selftest(args.format),
         Command::Send(args) => send::send(args).await,
+        Command::Session(args) => session::session(args).await,
     }
 }

@@ -29,6 +29,11 @@ pub enum Command {
     /// tracking session state. For exploring behaviour the bundled `run`
     /// scenario doesn't cover, without writing Rust.
     Send(SendArgs),
+    /// Keep a live session open with a target: register (or accept a
+    /// registration), keep it alive with automatic status reports, log and
+    /// validate everything received, and send detections, alerts, or tasks
+    /// on demand from typed commands. No scripted pass/fail scenario.
+    Session(SessionArgs),
 }
 
 #[derive(Args)]
@@ -84,6 +89,53 @@ pub struct SendArgs {
     /// Maximum seconds to transmit each file. A timeout closes the connection.
     #[arg(long, default_value_t = 30)]
     pub write_timeout_secs: u64,
+}
+
+#[derive(Args)]
+pub struct SessionArgs {
+    /// Which role the harness plays: `dmm` listens on `--target` for an ASM
+    /// under test to connect in; `asm` connects out to `--target`, a
+    /// DMM/middleware implementation under test.
+    #[arg(long, value_enum)]
+    pub role: Role,
+
+    /// For `--role dmm`, the literal `ip:port` to listen on. For
+    /// `--role asm`, the `host:port` to connect to.
+    #[arg(long)]
+    pub target: String,
+
+    /// Maximum incoming payload bytes (local resource limit, not a conformance rule).
+    #[arg(long, default_value_t = sapient_session::framing::DEFAULT_MAX_FRAME_BYTES)]
+    pub max_frame_bytes: u32,
+
+    /// How long to wait for the peer to connect (`--role dmm`) or for the
+    /// outbound connection to establish (`--role asm`, retried every second
+    /// within this time), in seconds.
+    #[arg(long, default_value_t = 30)]
+    pub connect_timeout_secs: u64,
+
+    /// Maximum seconds to transmit any one message. A timeout ends the
+    /// session, since the connection can't be reused after a partial write.
+    #[arg(long, default_value_t = 30)]
+    pub write_timeout_secs: u64,
+
+    /// Node ID the harness stamps on its own outgoing messages. Defaults
+    /// to a freshly generated random UUID.
+    #[arg(long)]
+    pub node_id: Option<String>,
+
+    /// `--role asm` only: also send the scripted DetectionReport every this
+    /// many seconds once registered. Off by default; use the `detection`
+    /// command to send one on demand.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub detection_interval_secs: Option<u64>,
+
+    /// `--role dmm` only: see `run --allowed-status-report-intervals`.
+    #[arg(
+        long,
+        default_value_t = sapient_session::state::DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS
+    )]
+    pub allowed_status_report_intervals: u32,
 }
 
 #[derive(Args)]

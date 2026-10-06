@@ -15,7 +15,10 @@ use tokio::io::{AsyncRead, AsyncWrite, split};
 
 use crate::framing::{FrameReader, FrameWriter};
 use crate::state::{DmmEvent, DmmSession, SessionState};
-use sapient_conformance_core::{bsi_flex_335_v2_0::Task, finding::Finding};
+use sapient_conformance_core::{
+    bsi_flex_335_v2_0::Task,
+    finding::{Finding, MessageContext},
+};
 
 /// Drives one DMM-role session over an already-connected stream (a
 /// connected `TcpStream`, or one half of a `tokio::io::duplex` in tests),
@@ -71,6 +74,18 @@ where
     /// EOF and I/O errors are conveyed by `poll_once`, not by this event slot.
     pub fn take_event(&mut self) -> Option<DmmEvent> {
         self.session.take_event()
+    }
+
+    /// See the session's `last_inbound`: the most recently received message's
+    /// type, sequence number and receipt time.
+    pub fn last_inbound(&self) -> Option<&MessageContext> {
+        self.session.last_inbound()
+    }
+
+    /// See the session's `last_reply`: the automatic reply's content type, if
+    /// the most recent inbound message needed one.
+    pub fn last_reply(&self) -> Option<&'static str> {
+        self.session.last_reply()
     }
 
     pub fn state(&self) -> &SessionState {

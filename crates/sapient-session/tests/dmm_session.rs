@@ -286,6 +286,44 @@ fn status_report_exceeding_interval_is_a_finding() {
     );
 }
 
+/// Consecutive reports `gap_millis` apart (second timestamped at 1s + gap).
+fn interval_findings_for_gap(gap_millis: i64) -> Vec<String> {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    register(&mut session);
+    session.on_bytes(&encode(status_report_at(1, DEFAULT_MODE)));
+    let mut second = status_report_at(1, DEFAULT_MODE);
+    let total_millis = 1_000 + gap_millis;
+    second.timestamp = Some(prost_types::Timestamp {
+        seconds: total_millis / 1_000,
+        nanos: (total_millis % 1_000) as i32 * 1_000_000,
+    });
+    session.on_bytes(&encode(second));
+    session
+        .findings()
+        .iter()
+        .map(|f| f.rule_id.clone())
+        .filter(|rule| rule == "session.status_report.interval_exceeded")
+        .collect()
+}
+
+/// An ASM reporting at its declared rate with ordinary jitter, up to the 10%
+/// tolerance, is not late; beyond the tolerance it is.
+#[test]
+fn status_report_interval_allows_ten_percent_tolerance() {
+    let declared_millis = (STATUS_INTERVAL_SECONDS * 1_000.0) as i64;
+    for gap in [declared_millis + 1, declared_millis + declared_millis / 10] {
+        assert!(
+            interval_findings_for_gap(gap).is_empty(),
+            "a {gap}ms gap is within tolerance"
+        );
+    }
+    assert_eq!(
+        interval_findings_for_gap(declared_millis + declared_millis / 10 + 1).len(),
+        1,
+        "a gap just over the tolerance is late"
+    );
+}
+
 #[test]
 fn first_status_report_within_allowed_intervals_produces_no_finding() {
     let mut session = DmmSession::new(HARNESS_NODE_ID);

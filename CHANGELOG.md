@@ -2,11 +2,26 @@
 
 ## Unreleased
 
+### Added
+
+- `session` command: keeps a connection open as an Edge Node (`--role asm`)
+  or C2 Node (`--role dmm`), logs and validates all traffic as it happens,
+  sends StatusReports automatically (and DetectionReports with
+  `--detection-interval-secs`), and sends detections, alerts, or tasks from
+  typed commands. In a terminal, commands are typed at a prompt kept below
+  the log, with history and file-path completion.
+
 ### Changed
 
 - `run --role asm` now retries a failed connection every second until
   `--connect-timeout-secs` runs out, instead of failing on the first
   refusal. An invalid `--target` address still fails immediately.
+- `session.status_report.interval_exceeded` now allows a gap of up to 10%
+  more than the declared status interval, so an Edge Node reporting at
+  exactly its declared rate isn't flagged for ordinary timing jitter.
+- The harness's Edge Node now sends periodic StatusReports at 90% of its
+  registered interval, so normal timing jitter can't make it exceed that
+  interval.
 - Release archives now include `QUICKSTART.md` and `examples/messages/`,
   so the quick start, including its `send` examples, works from a download
   without the repository.

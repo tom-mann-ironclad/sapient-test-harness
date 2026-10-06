@@ -117,7 +117,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
 /// on the wire -- a value that would fail as soon as it's stamped onto the
 /// harness's own outgoing messages should fail locally instead of letting
 /// a strict target reject the harness and look like a conformance failure.
-fn validate_harness_node_id(node_id: &str) -> io::Result<()> {
+pub(crate) fn validate_harness_node_id(node_id: &str) -> io::Result<()> {
     // `validate_uuid_v4` needs a rule_id, but this check never surfaces one
     // as a Finding -- only `.passed` is used, and this value is discarded.
     // Deliberately not shaped like a real rule ID (no dot), so it doesn't
@@ -141,27 +141,7 @@ async fn run_as_dmm(
     max_frame_bytes: u32,
     allowed_status_report_intervals: u32,
 ) -> io::Result<(Vec<Finding>, ScenarioResult)> {
-    let target: SocketAddr = target.parse().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "--target {target:?} is not a literal address -- --role dmm listens on one \
-                 specific ip:port (e.g. 0.0.0.0:5000), not a hostname"
-            ),
-        )
-    })?;
-    let listener = TcpListener::bind(target).await?;
-    eprintln!("Listening on {target} for an ASM to connect...");
-    let (stream, peer_addr) =
-        timeout(connect_timeout, listener.accept())
-            .await
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("no ASM connected to {target} within {connect_timeout:?}"),
-                )
-            })??;
-    eprintln!("ASM connected from {peer_addr}.");
+    let stream = listen_and_accept(target, connect_timeout).await?;
 
     let (reader, writer) = split(stream);
     let mut connection = DmmConnection::with_frame_reader(
@@ -220,7 +200,10 @@ async fn run_as_asm(
 /// (`InvalidInput`) fails at once, since retrying can't fix it. On giving
 /// up, the error keeps the last attempt's kind (e.g. `ConnectionRefused`),
 /// or `TimedOut` if the final attempt was still pending at the deadline.
-async fn connect_with_retries(target: &str, connect_timeout: Duration) -> io::Result<TcpStream> {
+pub(crate) async fn connect_with_retries(
+    target: &str,
+    connect_timeout: Duration,
+) -> io::Result<TcpStream> {
     // `None` only for a timeout too large to represent: no deadline at all.
     let deadline = Instant::now().checked_add(connect_timeout);
     let mut attempts = 0u32;
@@ -271,4 +254,35 @@ async fn connect_with_retries(target: &str, connect_timeout: Duration) -> io::Re
             ));
         }
     }
+}
+
+/// Listens on the literal `ip:port` `target` and accepts one ASM connection
+/// within `connect_timeout`. A hostname is rejected: binding needs one
+/// specific local address, not a resolved list.
+pub(crate) async fn listen_and_accept(
+    target: &str,
+    connect_timeout: Duration,
+) -> io::Result<TcpStream> {
+    let target: SocketAddr = target.parse().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "--target {target:?} is not a literal address -- --role dmm listens on one \
+                 specific ip:port (e.g. 0.0.0.0:5000), not a hostname"
+            ),
+        )
+    })?;
+    let listener = TcpListener::bind(target).await?;
+    eprintln!("Listening on {target} for an ASM to connect...");
+    let (stream, peer_addr) =
+        timeout(connect_timeout, listener.accept())
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("no ASM connected to {target} within {connect_timeout:?}"),
+                )
+            })??;
+    eprintln!("ASM connected from {peer_addr}.");
+    Ok(stream)
 }

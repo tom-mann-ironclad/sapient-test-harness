@@ -179,6 +179,11 @@ pub struct DmmSession {
     /// Count of harness-initiated outbound messages issued so far
     /// (`issue_task`), for [`MessageContext::sequence`].
     outbound_sequence: u64,
+    /// Context of the most recent inbound message, for [`Self::last_inbound`].
+    last_inbound: Option<MessageContext>,
+    /// Content type of the automatic reply to the most recent inbound
+    /// message, if one was produced, for [`Self::last_reply`].
+    last_reply: Option<&'static str>,
 }
 
 /// How many multiples of the declared `status_interval` a StatusReport gap
@@ -192,6 +197,12 @@ pub struct DmmSession {
 /// instead; 3 is a typical default that most deployments never need to change.
 pub const DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS: u32 = 3;
 
+/// Fraction of the declared `status_interval` a gap between consecutive
+/// StatusReports may exceed it by before it's treated as late. An ASM
+/// reporting at exactly its declared rate still sees ordinary timer and
+/// scheduling jitter of a few milliseconds, and must not be flagged for it.
+pub const STATUS_REPORT_INTERVAL_TOLERANCE: f64 = 0.10;
+
 impl DmmSession {
     pub fn new(harness_node_id: impl Into<String>) -> Self {
         DmmSession {
@@ -203,6 +214,8 @@ impl DmmSession {
             allowed_status_report_intervals: DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS,
             inbound_sequence: 0,
             outbound_sequence: 0,
+            last_inbound: None,
+            last_reply: None,
         }
     }
 
@@ -217,6 +230,19 @@ impl DmmSession {
     /// Call after each processed frame; absence of an event does not imply success.
     pub fn take_event(&mut self) -> Option<DmmEvent> {
         self.event.take()
+    }
+
+    /// Type, sequence number and receipt time of the most recently received
+    /// message (`"undecodable"` if it didn't decode), or `None` before the
+    /// first. Unlike [`Self::take_event`], every inbound message updates it.
+    pub fn last_inbound(&self) -> Option<&MessageContext> {
+        self.last_inbound.as_ref()
+    }
+
+    /// Content type (e.g. `"TaskAck"`) of the automatic reply produced for the
+    /// most recent inbound message, or `None` if it needed no reply.
+    pub fn last_reply(&self) -> Option<&'static str> {
+        self.last_reply
     }
 
     pub fn state(&self) -> &SessionState {
@@ -238,6 +264,7 @@ impl DmmSession {
     /// requires one.
     pub fn on_bytes(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
         self.event = None;
+        self.last_reply = None;
         self.current_raw = raw.to_vec();
         self.inbound_sequence += 1;
         let occurred_at_unix_millis = now_unix_millis();
@@ -246,7 +273,7 @@ impl DmmSession {
             Ok(message) => message,
             Err(err) => {
                 let registered = matches!(self.state, SessionState::Registered(_));
-                self.findings.set_context(MessageContext {
+                self.set_inbound_context(MessageContext {
                     sequence: self.inbound_sequence,
                     direction: Direction::Inbound,
                     message_type: "undecodable".to_string(),
@@ -266,7 +293,7 @@ impl DmmSession {
                     let reply = self.error_reply(vec![format!(
                         "failed to decode received packet as a SapientMessage: {err}"
                     )]);
-                    Some(self.encode(reply))
+                    Some(self.encode_reply(reply))
                 } else {
                     None
                 };
@@ -274,11 +301,24 @@ impl DmmSession {
         };
 
         self.on_message(message, occurred_at_unix_millis)
-            .map(|reply| self.encode(reply))
+            .map(|reply| self.encode_reply(reply))
     }
 
     fn encode(&self, message: SapientMessage) -> Vec<u8> {
         message.encode_to_vec()
+    }
+
+    /// Encode an automatic reply, recording its type for [`Self::last_reply`].
+    fn encode_reply(&mut self, reply: SapientMessage) -> Vec<u8> {
+        self.last_reply = Some(content_type_name(&reply.content));
+        self.encode(reply)
+    }
+
+    /// Stamp findings with an inbound message's context and remember it for
+    /// [`Self::last_inbound`].
+    fn set_inbound_context(&mut self, context: MessageContext) {
+        self.last_inbound = Some(context.clone());
+        self.findings.set_context(context);
     }
 
     fn on_message(
@@ -287,7 +327,7 @@ impl DmmSession {
         occurred_at_unix_millis: u64,
     ) -> Option<SapientMessage> {
         let content = message.content.clone();
-        self.findings.set_context(MessageContext {
+        self.set_inbound_context(MessageContext {
             sequence: self.inbound_sequence,
             direction: Direction::Inbound,
             message_type: content_type_name(&content).to_string(),
@@ -529,7 +569,9 @@ impl DmmSession {
                                 "the previous StatusReport",
                                 -elapsed_seconds,
                             ));
-                        } else if elapsed_seconds > declared_seconds {
+                        } else if elapsed_seconds
+                            > declared_seconds * (1.0 + STATUS_REPORT_INTERVAL_TOLERANCE)
+                        {
                             self.findings.push(Finding {
                                 rule_id: "session.status_report.interval_exceeded".to_string(),
                                 field_path: "registration.status_definition.status_interval"
@@ -538,7 +580,8 @@ impl DmmSession {
                                 message: format!(
                                     "StatusReport arrived {elapsed_seconds:.3}s after the \
                                      previous one, exceeding the declared interval of \
-                                     {declared_seconds:.3}s."
+                                     {declared_seconds:.3}s by more than the {:.0}% tolerance.",
+                                    STATUS_REPORT_INTERVAL_TOLERANCE * 100.0
                                 ),
                                 ..Default::default()
                             });

@@ -16,7 +16,7 @@ use crate::report::{RunOutcome, RunReport, format_context_suffix, sanitize_for_t
 const PRE_CONNECTION_STAGES: &[&str] = &["connect", "listen_or_accept", "configure_node_id"];
 
 #[derive(Clone, Copy)]
-enum Style {
+pub(crate) enum Style {
     Bold,
     Dim,
     Green,
@@ -36,12 +36,12 @@ impl Style {
     }
 }
 
-struct Painter {
-    color: bool,
+pub(crate) struct Painter {
+    pub(crate) color: bool,
 }
 
 impl Painter {
-    fn paint(&self, style: Style, text: &str) -> String {
+    pub(crate) fn paint(&self, style: Style, text: &str) -> String {
         if self.color {
             format!("\x1b[{}m{text}\x1b[0m", style.code())
         } else {
@@ -49,27 +49,31 @@ impl Painter {
         }
     }
 
-    fn pass(&self) -> String {
+    pub(crate) fn pass(&self) -> String {
         self.paint(Style::Green, "✓")
     }
 
-    fn fail(&self) -> String {
+    pub(crate) fn fail(&self) -> String {
         self.paint(Style::Red, "✗")
     }
 
-    fn skip(&self) -> String {
+    pub(crate) fn skip(&self) -> String {
         self.paint(Style::Yellow, "–")
     }
 
-    fn warn(&self) -> String {
+    pub(crate) fn warn(&self) -> String {
         self.paint(Style::Yellow, "!")
     }
 }
 
+/// Whether stdout output should be coloured: a terminal, with `NO_COLOR` unset.
+pub(crate) fn stdout_color() -> bool {
+    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+
 /// Print the verbose report to stdout, coloured when stdout is a terminal.
 pub fn print_verbose(report: &RunReport) {
-    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    print!("{}", render_verbose(report, color));
+    print!("{}", render_verbose(report, stdout_color()));
 }
 
 /// Render the verbose report. Peer-influenced text (finding messages,

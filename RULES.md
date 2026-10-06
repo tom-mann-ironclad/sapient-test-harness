@@ -267,7 +267,7 @@ Findings the session state machines (`crates/sapient-session/src/{state,asm_stat
 | `session.registration.no_default_mode` | Registration must declare either a mode with mode_type MODE_TYPE_DEFAULT, or (for backward compatibility) at least one mode with mode_type MODE_TYPE_PERMANENT, so the session has a starting mode. |
 | `session.sequencing.registration_required` | Received a {message_type} before a successful Registration/RegistrationAck handshake; Registration must always come first. |
 | `session.status_report.first_report_late` | First StatusReport arrived {elapsed_seconds:.3}s after Registration, exceeding the allowed {} declared intervals ({allowed_seconds:.3}s of {declared_seconds:.3}s each). |
-| `session.status_report.interval_exceeded` | StatusReport arrived {elapsed_seconds:.3}s after the previous one, exceeding the declared interval of {declared_seconds:.3}s. |
+| `session.status_report.interval_exceeded` | StatusReport arrived {elapsed_seconds:.3}s after the previous one, exceeding the declared interval of {declared_seconds:.3}s by more than the {:.0}% tolerance. |
 | `session.status_report.mode_mismatch` | StatusReport declares mode {reported_mode:?}, but the session's tracked active mode (from Registration/mode_change tasks) is {:?}. |
 | `session.status_report.timestamp_reversed` | StatusReport's timestamp is {seconds_before:.3}s before {context}'s timestamp; the ASM's reported time must not go backwards. |
 | `session.task.duplicate_id` | Issued an already tracked task ID {task_id:?}; existing lifecycle retained. |

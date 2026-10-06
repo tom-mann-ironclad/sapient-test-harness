@@ -140,9 +140,18 @@ where
     }
 }
 
+/// How often the harness's ASM sends ordinary StatusReports: 90% of the
+/// registered interval. A DMM measures the gap between consecutive reports'
+/// own timestamps against the declared interval with no tolerance, so
+/// scheduling exactly one interval after the previous send would overrun it
+/// by timer and write latency.
+pub(crate) fn asm_status_period() -> Duration {
+    Duration::from_secs_f32(fixtures::STATUS_INTERVAL_SECONDS * 0.9)
+}
+
 /// Build ordinary and closing reports from the session's current mode, rather
 /// than the mode captured at registration (tasks can change it while waiting).
-fn asm_status(state: &AsmSessionState, system: System) -> StatusReport {
+pub(crate) fn asm_status(state: &AsmSessionState, system: System) -> StatusReport {
     let mode = match state {
         AsmSessionState::Registered(contract) => contract.active_mode.mode_name.clone(),
         _ => None,
@@ -153,6 +162,55 @@ fn asm_status(state: &AsmSessionState, system: System) -> StatusReport {
         info: Some(System::Ok as i32),
         mode,
         ..Default::default()
+    }
+}
+
+/// The scripted DetectionReport: a fresh report and object ID, located and
+/// classified consistently with [`fixtures::valid_registration`].
+pub(crate) fn scripted_detection_report() -> DetectionReport {
+    DetectionReport {
+        report_id: Some(Ulid::new().to_string()),
+        object_id: Some(Ulid::new().to_string()),
+        task_id: None,
+        state: None,
+        location_oneof: Some(DetectionLocationOneof::RangeBearing(
+            fixtures::detection_position(),
+        )),
+        detection_confidence: None,
+        track_info: vec![],
+        prediction_location: None,
+        object_info: vec![],
+        classification: vec![DetectionReportClassification {
+            r#type: Some(fixtures::DECLARED_CLASSIFICATION_TYPE.to_string()),
+            confidence: None,
+            sub_class: vec![],
+        }],
+        behaviour: vec![],
+        associated_file: vec![],
+        signal: vec![],
+        associated_detection: vec![],
+        derived_detection: vec![],
+        velocity_oneof: None,
+        colour: None,
+        id: None,
+    }
+}
+
+/// The scripted information Alert, with the caller's correlation ID.
+pub(crate) fn scripted_alert(alert_id: String) -> Alert {
+    Alert {
+        alert_id: Some(alert_id),
+        alert_type: Some(AlertType::Information as i32),
+        status: Some(AlertStatus::Active as i32),
+        description: None,
+        location_oneof: None,
+        region_id: None,
+        priority: None,
+        ranking: None,
+        confidence: None,
+        associated_file: vec![],
+        associated_detection: vec![],
+        additional_information: None,
     }
 }
 
@@ -181,9 +239,7 @@ where
                 *stage = "send_periodic_status";
                 let status = asm_status(connection.state(), System::Ok);
                 connection.issue_status_report(status).await?;
-                *next_status = Some(
-                    Instant::now() + Duration::from_secs_f32(fixtures::STATUS_INTERVAL_SECONDS),
-                );
+                *next_status = Some(Instant::now() + asm_status_period());
             } else {
                 *next_status = None;
             }
@@ -553,38 +609,13 @@ where
     let status = asm_status(connection.state(), System::Ok);
     connection.issue_status_report(status).await?;
     stream_new_findings(connection.findings(), &mut shown_findings);
-    next_status = Some(Instant::now() + Duration::from_secs_f32(fixtures::STATUS_INTERVAL_SECONDS));
+    next_status = Some(Instant::now() + asm_status_period());
 
     result.complete(Check::StatusReport);
 
     *stage = "send_detection_report";
     connection
-        .issue_detection_report(DetectionReport {
-            report_id: Some(Ulid::new().to_string()),
-            object_id: Some(Ulid::new().to_string()),
-            task_id: None,
-            state: None,
-            location_oneof: Some(DetectionLocationOneof::RangeBearing(
-                fixtures::detection_position(),
-            )),
-            detection_confidence: None,
-            track_info: vec![],
-            prediction_location: None,
-            object_info: vec![],
-            classification: vec![DetectionReportClassification {
-                r#type: Some(fixtures::DECLARED_CLASSIFICATION_TYPE.to_string()),
-                confidence: None,
-                sub_class: vec![],
-            }],
-            behaviour: vec![],
-            associated_file: vec![],
-            signal: vec![],
-            associated_detection: vec![],
-            derived_detection: vec![],
-            velocity_oneof: None,
-            colour: None,
-            id: None,
-        })
+        .issue_detection_report(scripted_detection_report())
         .await?;
     stream_new_findings(connection.findings(), &mut shown_findings);
 
@@ -630,20 +661,7 @@ where
     let alert_id = Ulid::new().to_string();
     *stage = "send_alert";
     connection
-        .issue_alert(Alert {
-            alert_id: Some(alert_id.clone()),
-            alert_type: Some(AlertType::Information as i32),
-            status: Some(AlertStatus::Active as i32),
-            description: None,
-            location_oneof: None,
-            region_id: None,
-            priority: None,
-            ranking: None,
-            confidence: None,
-            associated_file: vec![],
-            associated_detection: vec![],
-            additional_information: None,
-        })
+        .issue_alert(scripted_alert(alert_id.clone()))
         .await?;
     stream_new_findings(connection.findings(), &mut shown_findings);
 
