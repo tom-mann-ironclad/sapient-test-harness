@@ -15,6 +15,15 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-pc-wind
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+# Supply-chain metadata for each release: binaries built with their dependency
+# list embedded (readable by `cargo audit bin`, Trivy, Syft), a CycloneDX SBOM
+# (`sapient-test-harness-cli.cdx.xml`), and GitHub build-provenance
+# attestations (`gh attestation verify <file> --repo <owner>/<repo>`).
+# release.yml installs the pinned tool versions and generates the SBOM itself;
+# see the HAND-ADDED comments there.
+cargo-auditable = true
+cargo-cyclonedx = true
+github-attestations = true
 # release.yml has a hand-added `validate` job, `if:` conditions, and SHA-pinned
 # `uses:` actions on top of what `dist generate` produces (see the comment at
 # the top of that job) -- these are permanent, deliberate drift, not staleness

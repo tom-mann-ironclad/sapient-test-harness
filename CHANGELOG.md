@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Releases include a CycloneDX SBOM (`sapient-test-harness-cli.cdx.xml`,
+  with a checksum) covering every platform's dependencies, and signed
+  GitHub build-provenance attestations for every release file
+  (`gh attestation verify`). Binaries are built with `cargo auditable`, so
+  `cargo audit bin` and similar scanners can read their dependency list.
+- CI generates the SBOM on every push.
+
 ## 1.0.0-beta.4
 
 ### Added

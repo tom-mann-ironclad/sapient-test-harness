@@ -31,6 +31,18 @@ Alternatively, download the archive for your platform from the release
 page and extract `sapient-harness` yourself; each archive has a `.sha256`
 checksum alongside it.
 
+**Verifying a download.** Each release (from `v1.0.0-beta.5`) also carries:
+
+- `sha256.sum`, checksums for every file in the release
+  (`sha256sum -c sha256.sum --ignore-missing` in the download directory);
+- signed build provenance, showing a file was built by this repository's
+  release workflow (needs the [GitHub CLI](https://cli.github.com/)):
+  `gh attestation verify <file> --repo tom-mann-ironclad/sapient-test-harness`;
+- `sapient-test-harness-cli.cdx.xml`, a CycloneDX SBOM listing every
+  dependency of the binaries for all platforms. The binaries also carry
+  their own dependency list, so `cargo audit bin sapient-harness` (or Trivy,
+  Syft, etc.) can check an installed copy for known vulnerabilities.
+
 **From source** needs a recent stable Rust toolchain
 ([rustup.rs](https://rustup.rs) if you don't have one):
 
