@@ -26,7 +26,9 @@ pub enum RunOutcome {
 /// meaning/type), so a beta consumer parsing this report can
 /// detect an incompatible change instead of silently misreading a new
 /// shape. Adding a new field is compatible and doesn't need a bump.
-pub const REPORT_SCHEMA_VERSION: u32 = 1;
+///
+/// - 2: `role` is `"edge"`/`"fusion"` (was `"asm"`/`"dmm"`).
+pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
 /// User-facing run report combining protocol findings with scenario coverage.
 /// Construct with `new` to derive consistent `outcome` and `passed` values;
@@ -42,11 +44,11 @@ pub struct RunReport {
     /// `--node-id`, or the freshly generated default -- needed to correlate
     /// this run's traffic against target-side logs.
     pub harness_node_id: String,
-    /// Role played by the harness, rather than the target.
+    /// Node played by the harness (`"edge"` or `"fusion"`), rather than the target.
     pub role: Role,
     /// Name of the bundled scenario suite that ran.
     pub suite: String,
-    /// Configured connect address (ASM) or listen address (DMM).
+    /// Configured connect address (Edge Node) or listen address (Fusion Node).
     pub target: String,
     /// Wall-clock start of the run, in milliseconds since the Unix epoch --
     /// for correlating against target-side logs.

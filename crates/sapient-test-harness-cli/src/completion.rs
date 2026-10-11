@@ -75,8 +75,8 @@ impl ScenarioResult {
     /// Declare the bundled scenario even when connection setup fails.
     pub fn for_role(role: Role) -> Self {
         match role {
-            Role::Dmm => Self::new(&[Check::Registration, Check::StatusReport, Check::TaskAck]),
-            Role::Asm => Self::new(&[
+            Role::Fusion => Self::new(&[Check::Registration, Check::StatusReport, Check::TaskAck]),
+            Role::Edge => Self::new(&[
                 Check::Registration,
                 Check::StatusReport,
                 Check::DetectionReport,

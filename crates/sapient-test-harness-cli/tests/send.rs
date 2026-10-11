@@ -144,13 +144,17 @@ async fn sends_non_conformant_messages_from_both_sides_and_warns_without_blockin
         ReplyOutcome::Reply(reply) => {
             assert!(matches!(reply.content, Some(Content::Alert(_))))
         }
-        other => panic!("expected the DMM side to receive the ASM's Alert, got {other:?}"),
+        other => {
+            panic!("expected the Fusion Node side to receive the Edge Node's Alert, got {other:?}")
+        }
     }
     match asm_outcome.reply {
         ReplyOutcome::Reply(reply) => {
             assert!(matches!(reply.content, Some(Content::Task(_))))
         }
-        other => panic!("expected the ASM side to receive the DMM's Task, got {other:?}"),
+        other => {
+            panic!("expected the Edge Node side to receive the Fusion Node's Task, got {other:?}")
+        }
     }
 }
 

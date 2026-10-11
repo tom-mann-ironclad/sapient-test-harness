@@ -168,8 +168,8 @@ pub async fn send(args: SendArgs) -> ExitCode {
     }
 
     let stream = match args.role {
-        Role::Dmm => connect_as_dmm(&args.target, connect_timeout).await,
-        Role::Asm => connect_as_asm(&args.target, connect_timeout).await,
+        Role::Fusion => connect_as_dmm(&args.target, connect_timeout).await,
+        Role::Edge => connect_as_asm(&args.target, connect_timeout).await,
     };
     let mut stream = match stream {
         Ok(stream) => stream,
@@ -265,7 +265,7 @@ async fn connect_as_dmm(target: &str, connect_timeout: Duration) -> io::Result<T
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "--target {target:?} is not a literal address -- --role dmm listens on one \
+                "--target {target:?} is not a literal address -- --role fusion listens on one \
                  specific ip:port (e.g. 0.0.0.0:5000), not a hostname"
             ),
         )

@@ -337,7 +337,7 @@ impl AsmSession {
                 field_path: "registration_ack.acceptance".to_string(),
                 severity: Severity::Error,
                 message: format!(
-                    "DMM rejected our Registration: {}",
+                    "Fusion Node rejected our Registration: {}",
                     ack.ack_response_reason.join("; ")
                 ),
                 ..Default::default()
@@ -357,25 +357,26 @@ impl AsmSession {
         // accepted it). A resolution via the MODE_TYPE_PERMANENT fallback
         // is accepted (with a warning), not treated as that kind of bug --
         // see `active_mode` module docs for why.
-        let active_mode =
-            match resolve_active_mode(&pending_registration.mode_definition) {
-                Ok((mode, ActiveModeSource::Explicit)) => mode,
-                Ok((mode, ActiveModeSource::PermanentNamedDefault)) => {
-                    self.findings.push(Finding {
+        let active_mode = match resolve_active_mode(&pending_registration.mode_definition) {
+            Ok((mode, ActiveModeSource::Explicit)) => mode,
+            Ok((mode, ActiveModeSource::PermanentNamedDefault)) => {
+                self.findings.push(Finding {
                     rule_id: "session.registration.default_mode_via_permanent_name".to_string(),
                     field_path: "registration.mode_definition".to_string(),
                     severity: Severity::Warning,
                     message: format!(
                         "Our own Registration declares no mode with mode_type MODE_TYPE_DEFAULT; \
                          using the MODE_TYPE_PERMANENT mode named {:?} as the initial active \
-                         mode, matching the legacy DMM convention MODE_TYPE_DEFAULT was \
+                         mode, matching the legacy Fusion Node convention MODE_TYPE_DEFAULT was \
                          introduced to replace.",
                         mode.mode_name
-                    ), ..Default::default() });
-                    mode
-                }
-                Ok((mode, ActiveModeSource::FirstPermanentMode)) => {
-                    self.findings.push(Finding {
+                    ),
+                    ..Default::default()
+                });
+                mode
+            }
+            Ok((mode, ActiveModeSource::FirstPermanentMode)) => {
+                self.findings.push(Finding {
                     rule_id: "session.registration.default_mode_via_first_permanent".to_string(),
                     field_path: "registration.mode_definition".to_string(),
                     severity: Severity::Warning,
@@ -385,43 +386,45 @@ impl AsmSession {
                          first declared MODE_TYPE_PERMANENT mode ({:?}) as the initial active \
                          mode.",
                         mode.mode_name
-                    ), ..Default::default() });
-                    mode
-                }
-                Err(ActiveModeError::NoCandidate) => {
-                    self.findings.push(Finding {
-                        rule_id: "session.registration.no_default_mode".to_string(),
-                        field_path: "registration.mode_definition".to_string(),
-                        severity: Severity::Error,
-                        message: "Our own Registration declared no mode with mode_type \
+                    ),
+                    ..Default::default()
+                });
+                mode
+            }
+            Err(ActiveModeError::NoCandidate) => {
+                self.findings.push(Finding {
+                    rule_id: "session.registration.no_default_mode".to_string(),
+                    field_path: "registration.mode_definition".to_string(),
+                    severity: Severity::Error,
+                    message: "Our own Registration declared no mode with mode_type \
                               MODE_TYPE_DEFAULT and no mode with mode_type MODE_TYPE_PERMANENT \
-                              to fall back to. This is a harness/test scenario bug (the DMM \
-                              already accepted it), not something the peer did wrong."
-                            .to_string(),
-                        ..Default::default()
-                    });
-                    self.event = Some(AsmEvent::RegistrationFailed);
-                    self.state = AsmSessionState::NotRegistered;
-                    return None;
-                }
-                Err(ActiveModeError::MultipleDefaultModes(count)) => {
-                    self.findings.push(Finding {
+                              to fall back to. This is a harness/test scenario bug (the Fusion \
+                              Node already accepted it), not something the peer did wrong."
+                        .to_string(),
+                    ..Default::default()
+                });
+                self.event = Some(AsmEvent::RegistrationFailed);
+                self.state = AsmSessionState::NotRegistered;
+                return None;
+            }
+            Err(ActiveModeError::MultipleDefaultModes(count)) => {
+                self.findings.push(Finding {
                         rule_id: "session.registration.multiple_default_modes".to_string(),
                         field_path: "registration.mode_definition".to_string(),
                         severity: Severity::Error,
                         message: format!(
                             "Our own Registration declared {count} modes with mode_type \
                          MODE_TYPE_DEFAULT; exactly one is required. This is a harness/test \
-                         scenario bug (the DMM already accepted it), not something the peer \
+                         scenario bug (the Fusion Node already accepted it), not something the peer \
                          did wrong."
                         ),
                         ..Default::default()
                     });
-                    self.event = Some(AsmEvent::RegistrationFailed);
-                    self.state = AsmSessionState::NotRegistered;
-                    return None;
-                }
-            };
+                self.event = Some(AsmEvent::RegistrationFailed);
+                self.state = AsmSessionState::NotRegistered;
+                return None;
+            }
+        };
 
         self.state = AsmSessionState::Registered(Box::new(RegisteredAsmContract {
             registration: pending_registration,
@@ -521,7 +524,7 @@ impl AsmSession {
                         field_path: "task.command.mode_change".to_string(),
                         severity: Severity::Error,
                         message: format!(
-                            "DMM issued a mode_change task targeting mode \
+                            "Fusion Node issued a mode_change task targeting mode \
                              {target_mode_name:?}, which we never declared in our own \
                              Registration's mode_definition list."
                         ),
@@ -589,9 +592,9 @@ impl AsmSession {
             rule_id: "session.unexpected_message_for_role".to_string(),
             field_path: "sapient_message.content".to_string(),
             severity: Severity::Error,
-            message: "Received a message type the ASM role never expects as inbound traffic \
+            message: "Received a message type the Edge Node role never expects as inbound traffic \
                       (e.g. Registration, StatusReport, DetectionReport, Alert, TaskAck are \
-                      ASM-to-DMM messages)."
+                      Edge-to-Fusion Node messages)."
                 .to_string(),
             ..Default::default()
         });
@@ -604,7 +607,7 @@ impl AsmSession {
             field_path: "sapient_message.content".to_string(),
             severity: Severity::Error,
             message: format!(
-                "Received a {message_type} before our Registration was accepted; the DMM \
+                "Received a {message_type} before our Registration was accepted; the Fusion Node \
                  shouldn't send this yet."
             ),
             ..Default::default()

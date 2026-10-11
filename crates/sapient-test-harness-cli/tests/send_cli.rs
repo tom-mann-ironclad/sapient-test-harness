@@ -55,7 +55,7 @@ async fn asm_role_resolves_hostname_targets() {
             .args([
                 "send",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &format!("localhost:{port}"),
                 "--file",
@@ -91,7 +91,7 @@ async fn dmm_role_rejects_hostname_targets_without_attempting_to_bind() {
             .args([
                 "send",
                 "--role",
-                "dmm",
+                "fusion",
                 "--target",
                 "localhost:0",
                 "--file",
@@ -132,7 +132,7 @@ async fn a_later_malformed_file_fails_before_any_file_is_sent_or_any_connection_
             .args([
                 "send",
                 "--role",
-                "dmm",
+                "fusion",
                 "--target",
                 "127.0.0.1:0",
                 "--file",
@@ -176,7 +176,7 @@ async fn validation_warning_and_sent_print_before_the_reply_is_received() {
             .args([
                 "send",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &listener.local_addr().unwrap().to_string(),
                 "--file",

@@ -73,7 +73,7 @@ async fn asm_session_registers_reports_and_injects_on_command() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let (child, mut stdin) = spawn_session(&[
             "--role",
-            "asm",
+            "edge",
             "--target",
             &listener.local_addr().unwrap().to_string(),
         ]);
@@ -105,7 +105,7 @@ async fn asm_session_registers_reports_and_injects_on_command() {
         child.wait_with_output().await.unwrap()
     })
     .await
-    .expect("the ASM session should finish on `quit`");
+    .expect("the Edge Node session should finish on `quit`");
 
     assert_eq!(output.status.code(), Some(0));
     let log = String::from_utf8(output.stdout).unwrap();
@@ -124,7 +124,7 @@ async fn dmm_session_acknowledges_registration_and_sends_tasks_on_command() {
 
     let output = timeout(Duration::from_secs(15), async {
         let (child, mut stdin) =
-            spawn_session(&["--role", "dmm", "--target", &address.to_string()]);
+            spawn_session(&["--role", "fusion", "--target", &address.to_string()]);
         let mut peer = loop {
             match TcpStream::connect(address).await {
                 Ok(stream) => break stream,
@@ -150,7 +150,7 @@ async fn dmm_session_acknowledges_registration_and_sends_tasks_on_command() {
         child.wait_with_output().await.unwrap()
     })
     .await
-    .expect("the DMM session should finish on `quit`");
+    .expect("the Fusion Node session should finish on `quit`");
 
     assert_eq!(output.status.code(), Some(0));
     let log = String::from_utf8(output.stdout).unwrap();
@@ -173,7 +173,7 @@ async fn detection_interval_is_rejected_for_the_dmm_role() {
             .args([
                 "session",
                 "--role",
-                "dmm",
+                "fusion",
                 "--target",
                 "127.0.0.1:0",
                 "--detection-interval-secs",

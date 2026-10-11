@@ -251,7 +251,7 @@ Each prefix above is combined with these suffixes by the named function (in `com
 
 Findings the session state machines (`crates/sapient-session/src/{state,asm_state}.rs`) raise directly, independent of the payload-level checks above -- sequencing, cross-message correlation, and declared-vs-actual contract enforcement that a single message in isolation can't check. These don't follow the `<type>.<field>.<violation_kind>` convention above; see each rule ID's own source for exactly what it means.
 
-### `state.rs` -- DMM role (`DmmSession`)
+### `state.rs` -- Fusion Node role (`DmmSession`)
 
 | Rule ID | Message |
 |---|---|
@@ -262,23 +262,23 @@ Findings the session state machines (`crates/sapient-session/src/{state,asm_stat
 | `session.framing.undecodable` | received bytes that don't decode as a SapientMessage: {err} |
 | `session.peer_reported_error` | Peer sent an Error message about a packet it received: {} |
 | `session.registration.default_mode_via_first_permanent` | Registration declares no mode with mode_type MODE_TYPE_DEFAULT and no MODE_TYPE_PERMANENT mode named "default"; falling back to the first declared MODE_TYPE_PERMANENT mode ({:?}) as the initial active mode. Declare MODE_TYPE_DEFAULT explicitly, or name a Permanent mode "Default", to avoid this warning. |
-| `session.registration.default_mode_via_permanent_name` | Registration declares no mode with mode_type MODE_TYPE_DEFAULT; using the MODE_TYPE_PERMANENT mode named {:?} as the initial active mode, matching the legacy DMM convention MODE_TYPE_DEFAULT was introduced to replace. Declare MODE_TYPE_DEFAULT explicitly to avoid this warning. |
+| `session.registration.default_mode_via_permanent_name` | Registration declares no mode with mode_type MODE_TYPE_DEFAULT; using the MODE_TYPE_PERMANENT mode named {:?} as the initial active mode, matching the legacy Fusion Node convention MODE_TYPE_DEFAULT was introduced to replace. Declare MODE_TYPE_DEFAULT explicitly to avoid this warning. |
 | `session.registration.multiple_default_modes` | Registration declares {count} modes with mode_type MODE_TYPE_DEFAULT; exactly one is required. |
 | `session.registration.no_default_mode` | Registration must declare either a mode with mode_type MODE_TYPE_DEFAULT, or (for backward compatibility) at least one mode with mode_type MODE_TYPE_PERMANENT, so the session has a starting mode. |
 | `session.sequencing.registration_required` | Received a {message_type} before a successful Registration/RegistrationAck handshake; Registration must always come first. |
 | `session.status_report.first_report_late` | First StatusReport arrived {elapsed_seconds:.3}s after Registration, exceeding the allowed {} declared intervals ({allowed_seconds:.3}s of {declared_seconds:.3}s each). |
 | `session.status_report.interval_exceeded` | StatusReport arrived {elapsed_seconds:.3}s after the previous one, exceeding the declared interval of {declared_seconds:.3}s by more than the {:.0}% tolerance. |
 | `session.status_report.mode_mismatch` | StatusReport declares mode {reported_mode:?}, but the session's tracked active mode (from Registration/mode_change tasks) is {:?}. |
-| `session.status_report.timestamp_reversed` | StatusReport's timestamp is {seconds_before:.3}s before {context}'s timestamp; the ASM's reported time must not go backwards. |
+| `session.status_report.timestamp_reversed` | StatusReport's timestamp is {seconds_before:.3}s before {context}'s timestamp; the Edge Node's reported time must not go backwards. |
 | `session.task.duplicate_id` | Issued an already tracked task ID {task_id:?}; existing lifecycle retained. |
-| `session.task.issued_before_registration` | A Task was issued before any ASM had registered on this session. |
+| `session.task.issued_before_registration` | A Task was issued before any Edge Node had registered on this session. |
 | `session.task.mode_change_unknown_mode` | Issued a mode_change task targeting mode {target_mode_name:?}, which isn't declared anywhere in the registration's mode_definition list. |
 | `session.task_ack.correlation_mismatch` | No outstanding task matches TaskAck task_id {task_id:?}. |
 | `session.task_ack.duplicate` | Repeated {status:?} acknowledgement for task {task_id:?}; state unchanged. |
 | `session.task_ack.invalid_transition` | Task {task_id:?} cannot transition from {:?} to {status:?} under the harness lifecycle policy. |
-| `session.unexpected_message_for_role` | Received a message type the DMM role never expects as inbound traffic (e.g. Task, AlertAck, RegistrationAck are DMM-to-ASM messages). |
+| `session.unexpected_message_for_role` | Received a message type the Fusion Node role never expects as inbound traffic (e.g. Task, AlertAck, RegistrationAck are Fusion-to-Edge Node messages). |
 
-### `asm_state.rs` -- ASM role (`AsmSession`)
+### `asm_state.rs` -- Edge Node role (`AsmSession`)
 
 | Rule ID | Message |
 |---|---|
@@ -287,13 +287,13 @@ Findings the session state machines (`crates/sapient-session/src/{state,asm_stat
 | `session.framing.undecodable` | received bytes that don't decode as a SapientMessage: {err} |
 | `session.peer_reported_error` | Peer sent an Error message about a packet it received: {} |
 | `session.registration.default_mode_via_first_permanent` | Our own Registration declares no mode with mode_type MODE_TYPE_DEFAULT and no MODE_TYPE_PERMANENT mode named "default"; falling back to the first declared MODE_TYPE_PERMANENT mode ({:?}) as the initial active mode. |
-| `session.registration.default_mode_via_permanent_name` | Our own Registration declares no mode with mode_type MODE_TYPE_DEFAULT; using the MODE_TYPE_PERMANENT mode named {:?} as the initial active mode, matching the legacy DMM convention MODE_TYPE_DEFAULT was introduced to replace. |
-| `session.registration.multiple_default_modes` | Our own Registration declared {count} modes with mode_type MODE_TYPE_DEFAULT; exactly one is required. This is a harness/test scenario bug (the DMM already accepted it), not something the peer did wrong. |
-| `session.registration.no_default_mode` | Our own Registration declared no mode with mode_type MODE_TYPE_DEFAULT and no mode with mode_type MODE_TYPE_PERMANENT to fall back to. This is a harness/test scenario bug (the DMM already accepted it), not something the peer did wrong. |
-| `session.registration.rejected` | DMM rejected our Registration: {} |
+| `session.registration.default_mode_via_permanent_name` | Our own Registration declares no mode with mode_type MODE_TYPE_DEFAULT; using the MODE_TYPE_PERMANENT mode named {:?} as the initial active mode, matching the legacy Fusion Node convention MODE_TYPE_DEFAULT was introduced to replace. |
+| `session.registration.multiple_default_modes` | Our own Registration declared {count} modes with mode_type MODE_TYPE_DEFAULT; exactly one is required. This is a harness/test scenario bug (the Fusion Node already accepted it), not something the peer did wrong. |
+| `session.registration.no_default_mode` | Our own Registration declared no mode with mode_type MODE_TYPE_DEFAULT and no mode with mode_type MODE_TYPE_PERMANENT to fall back to. This is a harness/test scenario bug (the Fusion Node already accepted it), not something the peer did wrong. |
+| `session.registration.rejected` | Fusion Node rejected our Registration: {} |
 | `session.registration.sent_twice` | register() was called again while a Registration was already outstanding or accepted; this session's own Registration should only be sent once (re-registration is a legitimate protocol event, but the harness itself choosing to send a second one mid-test is almost always a scenario bug, not something to encode here). |
-| `session.sequencing.registration_required` | Received a {message_type} before our Registration was accepted; the DMM shouldn't send this yet. |
+| `session.sequencing.registration_required` | Received a {message_type} before our Registration was accepted; the Fusion Node shouldn't send this yet. |
 | `session.sequencing.unexpected_registration_ack` | Received a RegistrationAck before this session ever sent a Registration. |
-| `session.task.mode_change_unknown_mode` | DMM issued a mode_change task targeting mode {target_mode_name:?}, which we never declared in our own Registration's mode_definition list. |
+| `session.task.mode_change_unknown_mode` | Fusion Node issued a mode_change task targeting mode {target_mode_name:?}, which we never declared in our own Registration's mode_definition list. |
 | `session.unexpected_message_for_role` | Received an unprompted RegistrationAck while already registered; expected at most one per Registration sent. |
 

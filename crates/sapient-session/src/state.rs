@@ -401,7 +401,7 @@ impl DmmSession {
                     message: format!(
                         "Registration declares no mode with mode_type MODE_TYPE_DEFAULT; using \
                          the MODE_TYPE_PERMANENT mode named {:?} as the initial active mode, \
-                         matching the legacy DMM convention MODE_TYPE_DEFAULT was introduced to \
+                         matching the legacy Fusion Node convention MODE_TYPE_DEFAULT was introduced to \
                          replace. Declare MODE_TYPE_DEFAULT explicitly to avoid this warning.",
                         mode.mode_name
                     ),
@@ -889,9 +889,10 @@ impl DmmSession {
             rule_id: "session.unexpected_message_for_role".to_string(),
             field_path: "sapient_message.content".to_string(),
             severity: Severity::Error,
-            message: "Received a message type the DMM role never expects as inbound traffic \
-                      (e.g. Task, AlertAck, RegistrationAck are DMM-to-ASM messages)."
-                .to_string(),
+            message:
+                "Received a message type the Fusion Node role never expects as inbound traffic \
+                      (e.g. Task, AlertAck, RegistrationAck are Fusion-to-Edge Node messages)."
+                    .to_string(),
             ..Default::default()
         });
         None
@@ -976,7 +977,7 @@ impl DmmSession {
                 rule_id: "session.task.issued_before_registration".to_string(),
                 field_path: "session".to_string(),
                 severity: Severity::Error,
-                message: "A Task was issued before any ASM had registered on this session."
+                message: "A Task was issued before any Edge Node had registered on this session."
                     .to_string(),
                 ..Default::default()
             });
@@ -1098,7 +1099,7 @@ fn timestamp_reversed_finding(context: &str, seconds_before: f64) -> Finding {
         severity: Severity::Error,
         message: format!(
             "StatusReport's timestamp is {seconds_before:.3}s before {context}'s timestamp; \
-             the ASM's reported time must not go backwards."
+             the Edge Node's reported time must not go backwards."
         ),
         ..Default::default()
     }

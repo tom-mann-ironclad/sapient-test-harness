@@ -45,14 +45,14 @@ pub struct SelftestArgs {
 
 #[derive(Args)]
 pub struct SendArgs {
-    /// Which role the harness plays: `dmm` listens on `--target` for a
-    /// peer to connect in; `asm` connects out to `--target`.
+    /// Which node the harness plays: `fusion` listens on `--target` for a
+    /// peer to connect in; `edge` connects out to `--target`.
     #[arg(long, value_enum)]
     pub role: Role,
 
-    /// For `--role dmm`, the literal `ip:port` to listen on (a hostname
+    /// For `--role fusion`, the literal `ip:port` to listen on (a hostname
     /// isn't accepted here -- binding needs one specific local address, not
-    /// a resolved list). For `--role asm`, the address to connect to; this
+    /// a resolved list). For `--role edge`, the address to connect to; this
     /// one does accept `host:port`, resolved when connecting.
     #[arg(long)]
     pub target: String,
@@ -74,8 +74,8 @@ pub struct SendArgs {
     #[arg(long = "file", required = true)]
     pub files: Vec<PathBuf>,
 
-    /// How long to wait for the peer to connect (`--role dmm`) or for the
-    /// outbound connection to establish (`--role asm`), in seconds.
+    /// How long to wait for the peer to connect (`--role fusion`) or for the
+    /// outbound connection to establish (`--role edge`), in seconds.
     #[arg(long, default_value_t = 30)]
     pub connect_timeout_secs: u64,
 
@@ -93,14 +93,14 @@ pub struct SendArgs {
 
 #[derive(Args)]
 pub struct SessionArgs {
-    /// Which role the harness plays: `dmm` listens on `--target` for an ASM
-    /// under test to connect in; `asm` connects out to `--target`, a
-    /// DMM/middleware implementation under test.
+    /// Which node the harness plays: `fusion` listens on `--target` for an
+    /// Edge Node under test to connect in; `edge` connects out to
+    /// `--target`, a Fusion Node under test. (`dmm`/`asm` also work.)
     #[arg(long, value_enum)]
     pub role: Role,
 
-    /// For `--role dmm`, the literal `ip:port` to listen on. For
-    /// `--role asm`, the `host:port` to connect to.
+    /// For `--role fusion`, the literal `ip:port` to listen on. For
+    /// `--role edge`, the `host:port` to connect to.
     #[arg(long)]
     pub target: String,
 
@@ -108,8 +108,8 @@ pub struct SessionArgs {
     #[arg(long, default_value_t = sapient_session::framing::DEFAULT_MAX_FRAME_BYTES)]
     pub max_frame_bytes: u32,
 
-    /// How long to wait for the peer to connect (`--role dmm`) or for the
-    /// outbound connection to establish (`--role asm`, retried every second
+    /// How long to wait for the peer to connect (`--role fusion`) or for the
+    /// outbound connection to establish (`--role edge`, retried every second
     /// within this time), in seconds.
     #[arg(long, default_value_t = 30)]
     pub connect_timeout_secs: u64,
@@ -124,13 +124,13 @@ pub struct SessionArgs {
     #[arg(long)]
     pub node_id: Option<String>,
 
-    /// `--role asm` only: also send the scripted DetectionReport every this
+    /// `--role edge` only: also send the scripted DetectionReport every this
     /// many seconds once registered. Off by default; use the `detection`
     /// command to send one on demand.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub detection_interval_secs: Option<u64>,
 
-    /// `--role dmm` only: see `run --allowed-status-report-intervals`.
+    /// `--role fusion` only: see `run --allowed-status-report-intervals`.
     #[arg(
         long,
         default_value_t = sapient_session::state::DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS
@@ -140,15 +140,15 @@ pub struct SessionArgs {
 
 #[derive(Args)]
 pub struct RunArgs {
-    /// Which role the harness plays: `dmm` listens on `--target` for an ASM
-    /// under test to connect in; `asm` connects out to `--target`, a
-    /// DMM/middleware implementation under test.
+    /// Which node the harness plays: `fusion` listens on `--target` for an
+    /// Edge Node under test to connect in; `edge` connects out to
+    /// `--target`, a Fusion Node under test. (`dmm`/`asm` also work.)
     #[arg(long, value_enum)]
     pub role: Role,
 
-    /// For `--role dmm`, the literal `ip:port` to listen on (a hostname
+    /// For `--role fusion`, the literal `ip:port` to listen on (a hostname
     /// isn't accepted here -- binding needs one specific local address, not
-    /// a resolved list). For `--role asm`, the address to connect to; this
+    /// a resolved list). For `--role edge`, the address to connect to; this
     /// one does accept `host:port`, resolved when connecting.
     #[arg(long)]
     pub target: String,
@@ -172,15 +172,15 @@ pub struct RunArgs {
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// How long to wait for the peer to connect (`--role dmm`) or for the
-    /// outbound connection to establish (`--role asm`), in seconds. For
-    /// `--role asm`, a failed attempt (e.g. refused because the target
+    /// How long to wait for the peer to connect (`--role fusion`) or for the
+    /// outbound connection to establish (`--role edge`), in seconds. For
+    /// `--role edge`, a failed attempt (e.g. refused because the target
     /// isn't listening yet) is retried every second within this time.
     #[arg(long, default_value_t = 30)]
     pub connect_timeout_secs: u64,
 
-    /// Overall cap on reads and writes once connected, in seconds. For `--role dmm`
-    /// this also bounds how long the harness will wait for the ASM under
+    /// Overall cap on reads and writes once connected, in seconds. For `--role fusion`
+    /// this also bounds how long the harness will wait for the Edge Node under
     /// test to end the session on its own terms (a `GoodBye` `StatusReport`
     /// or a disconnect). The connection closes when the run ends, including
     /// on deadline expiry or an I/O failure.
@@ -192,13 +192,13 @@ pub struct RunArgs {
     #[arg(long)]
     pub node_id: Option<String>,
 
-    /// For `--role dmm`: how many multiples of the declared
+    /// For `--role fusion`: how many multiples of the declared
     /// `status_interval` a StatusReport gap may span before it's treated
     /// as a problem, applied to the first StatusReport after Registration
     /// (which has no previous report to measure a single-interval gap
     /// against, and Registration itself can land at any phase of the
-    /// ASM's reporting rhythm, so a single interval is not a valid
-    /// deadline there). Ignored for `--role asm`.
+    /// Edge Node's reporting rhythm, so a single interval is not a valid
+    /// deadline there). Ignored for `--role edge`.
     #[arg(
         long,
         default_value_t = sapient_session::state::DEFAULT_ALLOWED_STATUS_REPORT_INTERVALS
@@ -206,18 +206,46 @@ pub struct RunArgs {
     pub allowed_status_report_intervals: u32,
 }
 
+/// Which SAPIENT node the harness plays. BSI Flex 335 v2.0 calls these the
+/// Edge Node and Fusion Node; the ICD's older names, ASM (Autonomous Sensor
+/// Module) and DMM (Decision Making Module), are still accepted as hidden
+/// `--role` aliases so existing scripts keep working.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    Dmm,
-    Asm,
+    /// Connects to a Fusion Node under test and sends what an Edge Node
+    /// (sensor) sends.
+    #[value(alias = "asm")]
+    Edge,
+    /// Listens for an Edge Node under test and replies as a Fusion Node
+    /// (C2/decision-making node) would.
+    #[value(alias = "dmm")]
+    Fusion,
+}
+
+impl Role {
+    /// Human-readable name, e.g. "Edge Node".
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::Edge => "Edge Node",
+            Role::Fusion => "Fusion Node",
+        }
+    }
+
+    /// The other side of the session: the role of the target under test.
+    pub fn peer(self) -> Role {
+        match self {
+            Role::Edge => Role::Fusion,
+            Role::Fusion => Role::Edge,
+        }
+    }
 }
 
 impl fmt::Display for Role {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Role::Dmm => write!(f, "dmm"),
-            Role::Asm => write!(f, "asm"),
+            Role::Edge => write!(f, "edge"),
+            Role::Fusion => write!(f, "fusion"),
         }
     }
 }

@@ -105,7 +105,7 @@ async fn silent_peers_cannot_pass() {
     let (r, w) = split(stream);
     let mut asm = AsmConnection::new(NODE, r, w);
     let result = run_asm_scenario(&mut asm, Instant::now() + Duration::from_secs(1)).await;
-    let result = report(Role::Asm, result, asm.take_findings());
+    let result = report(Role::Edge, result, asm.take_findings());
     verdict(&result, RunOutcome::Incomplete);
     check(&result, Check::Registration, CheckStatus::Incomplete);
 
@@ -114,7 +114,7 @@ async fn silent_peers_cannot_pass() {
     let mut dmm = DmmConnection::new(NODE, r, w);
     let result = run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(1)).await;
     verdict(
-        &report(Role::Dmm, result, dmm.take_findings()),
+        &report(Role::Fusion, result, dmm.take_findings()),
         RunOutcome::Incomplete,
     );
 }
@@ -127,7 +127,7 @@ async fn immediate_disconnects_cannot_pass() {
     let mut dmm = DmmConnection::new(NODE, r, w);
     let result = run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)).await;
     verdict(
-        &report(Role::Dmm, result, dmm.take_findings()),
+        &report(Role::Fusion, result, dmm.take_findings()),
         RunOutcome::Incomplete,
     );
 
@@ -142,7 +142,7 @@ async fn immediate_disconnects_cannot_pass() {
         },
     );
     verdict(
-        &report(Role::Asm, result, asm.take_findings()),
+        &report(Role::Edge, result, asm.take_findings()),
         RunOutcome::Incomplete,
     );
 }
@@ -211,7 +211,7 @@ async fn asm_case(case: u8) -> RunReport {
         run_asm_scenario(&mut asm, Instant::now() + Duration::from_secs(10)),
         target
     );
-    report(Role::Asm, result, asm.take_findings())
+    report(Role::Edge, result, asm.take_findings())
 }
 
 #[tokio::test(start_paused = true)]
@@ -338,7 +338,7 @@ async fn dmm_case(case: u8) -> RunReport {
         run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
         target
     );
-    report(Role::Dmm, result, dmm.take_findings())
+    report(Role::Fusion, result, dmm.take_findings())
 }
 
 #[tokio::test(start_paused = true)]
@@ -538,7 +538,7 @@ async fn reregistration_before_probe_uses_new_contract_and_requires_ack() {
         run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
         target
     );
-    let result = report(Role::Dmm, result, dmm.take_findings());
+    let result = report(Role::Fusion, result, dmm.take_findings());
     verdict(&result, RunOutcome::Incomplete);
     check(&result, Check::TaskAck, CheckStatus::Incomplete);
 }
@@ -620,7 +620,7 @@ async fn rejected_reregistration_is_not_mistaken_for_goodbye() {
         run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
         target
     );
-    let result = report(Role::Dmm, result, dmm.take_findings());
+    let result = report(Role::Fusion, result, dmm.take_findings());
     // The invalid re-registration is a genuine conformance violation, so
     // the run correctly fails overall -- but that's a separate question
     // from whether the scenario kept going and completed its checks after
@@ -645,7 +645,7 @@ async fn rejected_reregistration_is_not_mistaken_for_goodbye() {
     );
     assert_eq!(
         result.notes.last().map(String::as_str),
-        Some("ASM sent a GoodBye StatusReport; ending the run."),
+        Some("The Edge Node sent a GoodBye StatusReport; ending the run."),
         "the run should reach the real, later GoodBye, proving the \
          rejection didn't end it early: {:?}",
         result.notes
@@ -745,7 +745,7 @@ async fn reregistration_after_probe_issued_starts_a_fresh_epoch() {
         run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(10)),
         target
     );
-    let result = report(Role::Dmm, result, dmm.take_findings());
+    let result = report(Role::Fusion, result, dmm.take_findings());
     verdict(&result, RunOutcome::Passed);
     check(&result, Check::TaskAck, CheckStatus::Completed);
 }
@@ -773,7 +773,7 @@ async fn deadline_after_registration_before_alert_is_incomplete() {
         run_asm_scenario(&mut asm, Instant::now() + Duration::from_secs(1)),
         target
     );
-    let result = report(Role::Asm, result, asm.take_findings());
+    let result = report(Role::Edge, result, asm.take_findings());
     verdict(&result, RunOutcome::Incomplete);
     check(&result, Check::Registration, CheckStatus::Completed);
     check(&result, Check::AlertAck, CheckStatus::Incomplete);
@@ -842,7 +842,7 @@ async fn every_asm_send_is_bounded_and_preserves_prior_checks() {
             },
             target
         );
-        let report = report(Role::Asm, result, asm.take_findings());
+        let report = report(Role::Edge, result, asm.take_findings());
         assert_eq!(report.exit_code(), ExitCode::from(2));
         assert_eq!(report.outcome, RunOutcome::Incomplete);
         let error = report.operational_error.as_ref().unwrap();
@@ -876,7 +876,7 @@ async fn blocked_automatic_reply_keeps_findings_and_cannot_pass() {
     let start = Instant::now();
     let result = run_dmm_scenario(&mut dmm, start + Duration::from_secs(1)).await;
     assert_eq!(Instant::now(), start + Duration::from_secs(1));
-    let report = report(Role::Dmm, result, dmm.take_findings());
+    let report = report(Role::Fusion, result, dmm.take_findings());
     assert_eq!(report.exit_code(), ExitCode::from(2));
     assert_eq!(report.outcome, RunOutcome::Failed);
     assert_eq!(report.findings.len(), 2);
@@ -913,7 +913,7 @@ async fn blocked_dmm_probe_keeps_registration_and_status_progress() {
         run_dmm_scenario(&mut dmm, start + Duration::from_secs(1)),
         target
     );
-    let report = report(Role::Dmm, result, dmm.take_findings());
+    let report = report(Role::Fusion, result, dmm.take_findings());
     check(&report, Check::Registration, CheckStatus::Completed);
     check(&report, Check::StatusReport, CheckStatus::Completed);
     check(&report, Check::TaskAck, CheckStatus::Incomplete);
@@ -955,7 +955,7 @@ async fn connection_reset_keeps_preceding_findings_and_progress() {
     bytes.extend(raw);
     let mut dmm = DmmConnection::new(NODE, ResetAfter { bytes, offset: 0 }, tokio::io::sink());
     let result = run_dmm_scenario(&mut dmm, Instant::now() + Duration::from_secs(1)).await;
-    let report = report(Role::Dmm, result, dmm.take_findings());
+    let report = report(Role::Fusion, result, dmm.take_findings());
     assert_eq!(report.findings.len(), 2);
     check(&report, Check::Registration, CheckStatus::Completed);
     assert_eq!(
@@ -974,7 +974,7 @@ fn operational_failure_prevents_pass_even_after_all_checks_complete() {
         "receive_or_reply",
         std::io::ErrorKind::ConnectionReset.into(),
     );
-    let report = report(Role::Dmm, scenario, vec![]);
+    let report = report(Role::Fusion, scenario, vec![]);
     assert_eq!(report.outcome, RunOutcome::Incomplete);
     assert!(!report.passed);
     assert_eq!(report.exit_code(), ExitCode::from(2));
@@ -1103,7 +1103,7 @@ async fn delayed_fragmented_ack_keeps_status_cadence_and_current_mode() {
         target
     );
     verdict(
-        &report(Role::Asm, result, asm.take_findings()),
+        &report(Role::Edge, result, asm.take_findings()),
         RunOutcome::Passed,
     );
 }
@@ -1138,7 +1138,7 @@ async fn periodic_status_backpressure_obeys_the_run_deadline() {
         },
         target
     );
-    let report = report(Role::Asm, result, asm.take_findings());
+    let report = report(Role::Edge, result, asm.take_findings());
     check(&report, Check::StatusReport, CheckStatus::Completed);
     check(&report, Check::Goodbye, CheckStatus::Incomplete);
     assert_eq!(report.exit_code(), ExitCode::from(2));

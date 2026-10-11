@@ -288,7 +288,7 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut result = ScenarioResult::for_role(Role::Dmm);
+    let mut result = ScenarioResult::for_role(Role::Fusion);
     let mut stage = "starting_scenario";
     // Progress lives outside the cancellable future so every exit retains it
     // -- including a Ctrl-C, not just reaching the deadline: dropping the
@@ -350,7 +350,7 @@ where
         if Instant::now() >= deadline {
             note(
                 &mut result.notes,
-                "Reached the run's max runtime while observing the ASM.",
+                "Reached the run's max runtime while observing the Edge Node.",
             );
             break;
         }
@@ -385,7 +385,8 @@ where
         }
 
         *stage = "receive_or_reply";
-        let poll_result = dmm_poll_with_heartbeat(connection, deadline, "for the ASM").await?;
+        let poll_result =
+            dmm_poll_with_heartbeat(connection, deadline, "for the Edge Node").await?;
         stream_new_findings(connection.findings(), &mut shown_findings);
         match poll_result {
             PollWait::Processed => match connection.take_event() {
@@ -445,7 +446,7 @@ where
                     // contract for it to refer to any more.
                     note(
                         &mut result.notes,
-                        "ASM's registration was rejected (see findings); waiting for a valid \
+                        "The Edge Node's registration was rejected (see findings); waiting for a valid \
                          one on the same connection.",
                     );
                     status_received = false;
@@ -464,20 +465,20 @@ where
                 Some(DmmEvent::GoodbyeReceived) => {
                     note(
                         &mut result.notes,
-                        "ASM sent a GoodBye StatusReport; ending the run.",
+                        "The Edge Node sent a GoodBye StatusReport; ending the run.",
                     );
                     break;
                 }
                 _ => {}
             },
             PollWait::Disconnected => {
-                note(&mut result.notes, "ASM disconnected.");
+                note(&mut result.notes, "Edge Node disconnected.");
                 break;
             }
             PollWait::DeadlineReached => {
                 note(
                     &mut result.notes,
-                    "Reached the run's max runtime while waiting for further messages from the ASM.",
+                    "Reached the run's max runtime while waiting for further messages from the Edge Node.",
                 );
                 break;
             }
@@ -505,7 +506,7 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut result = ScenarioResult::for_role(Role::Asm);
+    let mut result = ScenarioResult::for_role(Role::Edge);
     let mut stage = "starting_scenario";
     // Progress lives outside the cancellable future so every exit retains it
     // -- including a Ctrl-C, not just reaching the deadline: dropping the
@@ -590,14 +591,14 @@ where
             PollWait::Disconnected => {
                 note(
                     &mut result.notes,
-                    "DMM under test disconnected before acknowledging our Registration.",
+                    "Fusion Node under test disconnected before acknowledging our Registration.",
                 );
                 return Ok(());
             }
             PollWait::DeadlineReached => {
                 note(
                     &mut result.notes,
-                    "Timed out waiting for a RegistrationAck from the DMM under test.",
+                    "Timed out waiting for a RegistrationAck from the Fusion Node under test.",
                 );
                 return Ok(());
             }
@@ -640,11 +641,11 @@ where
             connection.take_event();
             note(
                 &mut result.notes,
-                "Processed an inbound message from the DMM before continuing.",
+                "Processed an inbound message from the Fusion Node before continuing.",
             );
         }
         PollWait::Disconnected => {
-            note(&mut result.notes, "DMM under test disconnected.");
+            note(&mut result.notes, "Fusion Node under test disconnected.");
             return Ok(());
         }
         PollWait::DeadlineReached => {}
@@ -691,14 +692,14 @@ where
             PollWait::Disconnected => {
                 note(
                     &mut result.notes,
-                    "DMM under test disconnected before acknowledging our Alert.",
+                    "Fusion Node under test disconnected before acknowledging our Alert.",
                 );
                 return Ok(());
             }
             PollWait::DeadlineReached => {
                 note(
                     &mut result.notes,
-                    "Timed out waiting for an AlertAck from the DMM under test.",
+                    "Timed out waiting for an AlertAck from the Fusion Node under test.",
                 );
                 break;
             }

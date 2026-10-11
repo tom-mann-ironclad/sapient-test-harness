@@ -55,7 +55,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
         (Vec::new(), scenario)
     } else {
         let outcome = match args.role {
-            Role::Dmm => {
+            Role::Fusion => {
                 run_as_dmm(
                     &harness_node_id,
                     &args.target,
@@ -66,7 +66,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
                 )
                 .await
             }
-            Role::Asm => {
+            Role::Edge => {
                 run_as_asm(
                     &harness_node_id,
                     &args.target,
@@ -84,8 +84,8 @@ pub async fn run(args: RunArgs) -> ExitCode {
                 let mut scenario = ScenarioResult::for_role(args.role);
                 scenario.record_error(
                     match args.role {
-                        Role::Asm => "connect",
-                        Role::Dmm => "listen_or_accept",
+                        Role::Edge => "connect",
+                        Role::Fusion => "listen_or_accept",
                     },
                     err,
                 );
@@ -153,7 +153,7 @@ async fn run_as_dmm(
     )
     .with_allowed_status_report_intervals(allowed_status_report_intervals);
     let Some(deadline) = Instant::now().checked_add(max_runtime) else {
-        let mut scenario = ScenarioResult::for_role(Role::Dmm);
+        let mut scenario = ScenarioResult::for_role(Role::Fusion);
         scenario.record_error(
             "configure_deadline",
             io::Error::new(io::ErrorKind::InvalidInput, "max runtime is too large"),
@@ -183,7 +183,7 @@ async fn run_as_asm(
             .with_large_message_warning(crate::cli::warn_large_message),
     );
     let Some(deadline) = Instant::now().checked_add(max_runtime) else {
-        let mut scenario = ScenarioResult::for_role(Role::Asm);
+        let mut scenario = ScenarioResult::for_role(Role::Edge);
         scenario.record_error(
             "configure_deadline",
             io::Error::new(io::ErrorKind::InvalidInput, "max runtime is too large"),
@@ -267,22 +267,22 @@ pub(crate) async fn listen_and_accept(
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "--target {target:?} is not a literal address -- --role dmm listens on one \
+                "--target {target:?} is not a literal address -- --role fusion listens on one \
                  specific ip:port (e.g. 0.0.0.0:5000), not a hostname"
             ),
         )
     })?;
     let listener = TcpListener::bind(target).await?;
-    eprintln!("Listening on {target} for an ASM to connect...");
+    eprintln!("Listening on {target} for an Edge Node to connect...");
     let (stream, peer_addr) =
         timeout(connect_timeout, listener.accept())
             .await
             .map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::TimedOut,
-                    format!("no ASM connected to {target} within {connect_timeout:?}"),
+                    format!("no Edge Node connected to {target} within {connect_timeout:?}"),
                 )
             })??;
-    eprintln!("ASM connected from {peer_addr}.");
+    eprintln!("Edge Node connected from {peer_addr}.");
     Ok(stream)
 }

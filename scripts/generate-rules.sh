@@ -96,8 +96,8 @@ const FILE_ORDER: &[&str] = &[
 /// (file name under `crates/sapient-session/src/`, a short role label used
 /// as that section's heading).
 const SESSION_FILES: &[(&str, &str)] = &[
-    ("state.rs", "DMM role (`DmmSession`)"),
-    ("asm_state.rs", "ASM role (`AsmSession`)"),
+    ("state.rs", "Fusion Node role (`DmmSession`)"),
+    ("asm_state.rs", "Edge Node role (`AsmSession`)"),
 ];
 
 /// Composite validators (in `common.rs`, reused across files, or local to

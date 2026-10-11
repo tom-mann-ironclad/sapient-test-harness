@@ -51,7 +51,7 @@ async fn run_case(complete: bool, format: &str, invalid_envelope: bool) -> std::
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &listener.local_addr().unwrap().to_string(),
                 "--max-runtime-secs",
@@ -142,7 +142,8 @@ async fn complete_exchange_emits_passed_json_and_exits_zero() {
 
     // KI-025: report-level metadata for matching a report back to the
     // exact harness build and run that produced it.
-    assert_eq!(json["report_schema_version"], 1);
+    assert_eq!(json["report_schema_version"], 2);
+    assert_eq!(json["role"], "edge");
     assert_eq!(json["harness_version"], env!("CARGO_PKG_VERSION"));
     let node_id = json["harness_node_id"].as_str().unwrap();
     assert!(
@@ -217,7 +218,7 @@ async fn large_frame_warning_is_immediate_and_kept_out_of_json() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &listener.local_addr().unwrap().to_string(),
                 "--max-runtime-secs",
@@ -270,7 +271,7 @@ async fn configured_receive_limit_stops_at_the_header_with_a_resource_diagnostic
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &listener.local_addr().unwrap().to_string(),
                 "--max-frame-bytes",
@@ -302,7 +303,7 @@ async fn truncated_payload_retains_findings_progress_and_json() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &listener.local_addr().unwrap().to_string(),
                 "--format",
@@ -345,7 +346,7 @@ async fn truncated_payload_retains_findings_progress_and_json() {
 
 #[tokio::test]
 async fn connection_failures_and_accept_timeouts_produce_json() {
-    for role in ["asm", "dmm"] {
+    for role in ["edge", "fusion"] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap().to_string();
         drop(listener);
@@ -393,7 +394,7 @@ async fn asm_role_resolves_hostname_targets() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &format!("localhost:{port}"),
                 "--max-runtime-secs",
@@ -423,7 +424,7 @@ async fn dmm_role_rejects_hostname_targets_without_attempting_to_bind() {
             .args([
                 "run",
                 "--role",
-                "dmm",
+                "fusion",
                 "--target",
                 "localhost:0",
                 "--format",
@@ -456,7 +457,7 @@ async fn dmm_role_rejects_an_invalid_node_id_without_attempting_to_bind() {
             .args([
                 "run",
                 "--role",
-                "dmm",
+                "fusion",
                 "--target",
                 "127.0.0.1:0",
                 "--node-id",
@@ -496,7 +497,7 @@ async fn asm_role_rejects_an_invalid_node_id_without_attempting_to_connect() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &address,
                 "--node-id",
@@ -528,7 +529,7 @@ async fn a_valid_node_id_still_reaches_the_network() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &format!("127.0.0.1:{port}"),
                 "--node-id",
@@ -557,7 +558,7 @@ async fn peer_error_text_cannot_inject_terminal_control_sequences() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &listener.local_addr().unwrap().to_string(),
                 "--max-runtime-secs",
@@ -634,7 +635,7 @@ async fn findings_are_streamed_to_stderr_as_they_are_observed() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &listener.local_addr().unwrap().to_string(),
                 "--max-runtime-secs",
@@ -698,7 +699,7 @@ async fn ctrl_c_finalizes_a_report_with_partial_progress_and_findings_retained()
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &listener.local_addr().unwrap().to_string(),
                 "--max-runtime-secs",
@@ -781,7 +782,7 @@ async fn asm_role_retries_until_the_target_starts_listening() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &address.to_string(),
                 "--connect-timeout-secs",
@@ -820,7 +821,7 @@ async fn asm_role_gives_up_retrying_at_the_connect_timeout() {
             .args([
                 "run",
                 "--role",
-                "asm",
+                "edge",
                 "--target",
                 &address,
                 "--connect-timeout-secs",
@@ -846,4 +847,49 @@ async fn asm_role_gives_up_retrying_at_the_connect_timeout() {
     assert_eq!(report["operational_error"]["kind"], "ConnectionRefused");
     let message = report["operational_error"]["message"].as_str().unwrap();
     assert!(message.contains("attempt(s)"), "{message}");
+}
+
+/// The ICD's older role names stay accepted as hidden aliases, so scripts
+/// written for earlier releases keep working; the report uses the new names.
+#[tokio::test]
+async fn legacy_role_names_are_accepted_as_aliases() {
+    for (legacy, current) in [("asm", "edge"), ("dmm", "fusion")] {
+        let output = timeout(
+            Duration::from_secs(5),
+            Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+                .args([
+                    "run",
+                    "--role",
+                    legacy,
+                    "--target",
+                    "127.0.0.1:0",
+                    "--node-id",
+                    "not-a-uuid",
+                    "--format",
+                    "json",
+                ])
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        // Rejected after argument parsing, before any network use.
+        assert_eq!(output.status.code(), Some(2), "--role {legacy}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["role"], current, "--role {legacy}");
+    }
+
+    let help = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+        .args(["run", "--help"])
+        .output()
+        .await
+        .unwrap();
+    let help = String::from_utf8(help.stdout).unwrap();
+    // Only the current names are listed as possible values.
+    assert!(
+        help.contains("- edge:") && help.contains("- fusion:"),
+        "{help}"
+    );
+    assert!(!help.contains("- asm") && !help.contains("- dmm"), "{help}");
 }

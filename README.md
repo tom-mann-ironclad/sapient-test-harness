@@ -15,7 +15,7 @@ as [`sapient-rs`](https://crates.io/crates/sapient-rs) (Rust),
 plus a Go module.
 
 **New here?** Start with [`QUICKSTART.md`](QUICKSTART.md) — install, point
-it at your Edge Node or C2 Node implementation, and read the result. This
+it at your Edge Node or Fusion Node implementation, and read the result. This
 README covers the workspace layout instead.
 
 ## Layout
@@ -26,9 +26,11 @@ A Cargo workspace of three crates:
   BSI Flex 335 v2.0 checks, with no CLI or transport dependencies, so the
   same logic can back a CLI and a future hosted service without forking it.
 - **`crates/sapient-session`** — protocol-level session state machines and
-  role drivers (DMM and ASM), built on `sapient-conformance-core` for
-  message validation and adding session-level sequencing, timing, and
-  cross-message correlation a single-message validator can't check.
+  role drivers for the Fusion Node and Edge Node (`DmmConnection` and
+  `AsmConnection` in code, after the ICD's older DMM/ASM names), built on
+  `sapient-conformance-core` for message validation and adding
+  session-level sequencing, timing, and cross-message correlation a
+  single-message validator can't check.
 - **`crates/sapient-test-harness-cli`** — the `sapient-harness` binary:
   `run` drives a bundled scenario against a real target over TCP, `session`
   keeps a live, manually driven session open with one, `send` fires

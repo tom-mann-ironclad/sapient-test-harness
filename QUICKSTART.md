@@ -60,45 +60,47 @@ sapient-harness --help
 
 ## 2. A note on terminology
 
-The wire protocol and this harness's own code and `--role` flag still use
-the original naming -- **ASM** (Autonomous Sensor Module) and **DMM**
-(Decision Making Module) -- since that's what the ICD and the existing
-test suite are built around. Current SAPIENT usage prefers **Edge Node**
-and **C2 Node**. They mean the same things:
+This harness uses the BSI Flex 335 v2.0 names for the two kinds of SAPIENT
+node, and so does its `--role` flag:
 
-| Current term | `--role` value | Sends | Receives |
+| Node | `--role` value | Sends | Receives |
 |---|---|---|---|
-| Edge Node | `asm` | `Registration`, `StatusReport`, `DetectionReport`, `Alert` | `RegistrationAck`, `Task`, `AlertAck` |
-| C2 Node | `dmm` | `RegistrationAck`, `Task`, `AlertAck` | `Registration`, `StatusReport`, `DetectionReport`, `Alert` |
+| Edge Node | `edge` | `Registration`, `StatusReport`, `DetectionReport`, `Alert` | `RegistrationAck`, `Task`, `AlertAck` |
+| Fusion Node | `fusion` | `RegistrationAck`, `Task`, `AlertAck` | `Registration`, `StatusReport`, `DetectionReport`, `Alert` |
+
+Older SAPIENT documents, including the ICD, call these the **ASM**
+(Autonomous Sensor Module) and **DMM** (Decision Making Module). `--role asm`
+and `--role dmm` still work as aliases, so scripts written for earlier
+releases don't need changing.
 
 ## 3. Running against your implementation
 
 The harness always plays the *other* role from whatever you're testing --
 point it at your implementation, and it drives a real session against it.
 
-**Developing an Edge Node?** Run the harness as the C2 Node it registers
-with. `--target` is the address the harness listens on -- bind it
-somewhere your Edge Node can actually reach (e.g. `<C2 IP address>:<port>` if it's on
-another machine or in a container):
+**Developing an Edge Node?** Run the harness as the Fusion Node it
+registers with. `--target` is the address the harness listens on -- bind it
+somewhere your Edge Node can actually reach (e.g. `<harness IP address>:<port>`
+if it's on another machine or in a container):
 
 ```bash
-sapient-harness run --role dmm --target <C2 IP Address>:5000
+sapient-harness run --role fusion --target <harness IP address>:5000
 ```
 
-Then point your Edge Node's C2 connection at that address (the C2 test harness
-machine's IP and port `5000`, or `127.0.0.1:5000` if it's running
+Then point your Edge Node's Fusion Node connection at that address (the
+harness machine's IP and port `5000`, or `127.0.0.1:5000` if it's running
 locally too) and let it register.
 
-**Developing a C2 Node?** Run the harness as an Edge Node that connects
+**Developing a Fusion Node?** Run the harness as an Edge Node that connects
 out to it:
 
 ```bash
-sapient-harness run --role asm --target <C2 node address>:5000
+sapient-harness run --role edge --target <Fusion Node address>:5000
 ```
 
-`--target` means different things for the two roles: for `--role dmm` it's the
+`--target` means different things for the two roles: for `--role fusion` it's the
 literal `ip:port` to listen on (a hostname isn't accepted -- binding needs one
-specific local address, not a resolved list); for `--role asm` it's the address
+specific local address, not a resolved list); for `--role edge` it's the address
 to connect to, and accepts a hostname (`your-service.example:5000`,
 `localhost:5000`, a container/service-discovery name, etc.).
 
@@ -107,9 +109,9 @@ status reporting, a detection, a mode-change task, an alert) and prints a
 pass/fail report. Useful flags:
 
 - `--connect-timeout-secs <N>` (default 30) -- how long to wait for the
-  other side to connect. With `--role asm`, a refused or failed connection
+  other side to connect. With `--role edge`, a refused or failed connection
   is retried every second until this runs out, so you can start the
-  harness before your C2 Node is listening.
+  harness before your Fusion Node is listening.
 - `--max-runtime-secs <N>` (default 120) -- cap on all reads and writes once
   connected, including automatic replies and GoodBye. The connection closes at
   the end of the run. A deadline during a blocked write is an operational error;
@@ -143,7 +145,7 @@ messages exchanged, any timeouts) -- that's on `stderr`. The final report,
 on `stdout`, looks like this on success:
 
 ```
-sapient-harness run -- role=asm suite=v2.0 target=127.0.0.1:5000
+sapient-harness run -- role=edge suite=v2.0 target=127.0.0.1:5000
 
 PASS -- required scenario checks completed; no conformance errors.
 
@@ -156,7 +158,7 @@ Scenario checks:
 
 Notes:
   - Registration accepted.
-  - Processed an inbound message from the DMM (e.g. a Task) before continuing.
+  - Processed an inbound message from the Fusion Node (e.g. a Task) before continuing.
   - Alert acknowledged.
   - Sent a GoodBye StatusReport to end the session gracefully.
 ```
@@ -186,10 +188,10 @@ but incomplete checks remain visible.
 
 The bundled scenario requires:
 
-- **ASM role:** accepted registration, transmitted StatusReport and DetectionReport,
+- **Edge Node role:** accepted registration, transmitted StatusReport and DetectionReport,
   a valid correlated AlertAck, and a transmitted GoodBye. An unsolicited Task from
-  the DMM is optional and its absence does not fail the run.
-- **DMM role:** accepted registration, a validated ordinary StatusReport, and a
+  the Fusion Node is optional and its absence does not fail the run.
+- **Fusion Node role:** accepted registration, a validated ordinary StatusReport, and a
   valid correlated TaskAck for the probe task. The task check is skipped when the
   registration has no non-default mode for that probe. Spontaneous detections and
   alerts are validated if received but are not required to complete this scenario.
@@ -220,13 +222,13 @@ rules. CLI argument parsing and unsupported suite errors remain command errors.
 redirecting `stdout` gets you clean JSON with nothing else mixed in:
 
 ```bash
-sapient-harness run --role asm --target your-c2-node-host:5000 \
+sapient-harness run --role edge --target your-fusion-node-host:5000 \
   --format json > result.json
 ```
 
 ```json
 {
-  "role": "asm",
+  "role": "edge",
   "suite": "v2.0",
   "target": "127.0.0.1:5000",
   "passed": true,
@@ -241,7 +243,7 @@ sapient-harness run --role asm --target your-c2-node-host:5000 \
   "findings": [],
   "notes": [
     "Registration accepted.",
-    "Processed an inbound message from the DMM (e.g. a Task) before continuing.",
+    "Processed an inbound message from the Fusion Node (e.g. a Task) before continuing.",
     "Alert acknowledged.",
     "Sent a GoodBye StatusReport to end the session gracefully."
   ]
@@ -283,7 +285,7 @@ since that's what this repo's own CI uses (`.github/workflows/ci.yml`):
   id: conformance
   run: |
     status=0
-    sapient-harness run --role asm --target your-c2-node-host:5000 \
+    sapient-harness run --role edge --target your-fusion-node-host:5000 \
       --format json > result.json || status=$?
     echo "exit_code=$status" >> "$GITHUB_OUTPUT"
 
@@ -328,7 +330,7 @@ implementation reacts -- use `send` to fire off hand-crafted messages
 directly, one at a time or several in sequence over one connection:
 
 ```bash
-sapient-harness send --role asm --target your-c2-node-host:5000 \
+sapient-harness send --role edge --target your-fusion-node-host:5000 \
   --file examples/messages/from-edge-node/01-registration.json \
   --file examples/messages/from-edge-node/02-status-report.json
 ```
@@ -361,12 +363,12 @@ and warnings yourself.
 `run` drives one fixed scenario and then disconnects. To keep a connection
 up and drive it by hand instead, as you would with the legacy harness, use
 `session`. It registers (as an Edge Node) or accepts a registration (as a
-C2 Node), then stays connected until you quit, the other side disconnects,
+Fusion Node), then stays connected until you quit, the other side disconnects,
 or you press Ctrl-C:
 
 ```bash
-sapient-harness session --role asm --target your-c2-node-host:5000
-sapient-harness session --role dmm --target <C2 IP Address>:5000
+sapient-harness session --role edge --target your-fusion-node-host:5000
+sapient-harness session --role fusion --target <harness IP address>:5000
 ```
 
 While it runs, the harness:
@@ -384,12 +386,12 @@ Type commands into the terminal while it runs (`help` lists them):
 
 | Role | Command | Sends |
 |---|---|---|
-| Edge Node (`asm`) | `detection` | the scripted `DetectionReport` |
+| Edge Node (`edge`) | `detection` | the scripted `DetectionReport` |
 | | `alert` | the scripted `Alert` (its `AlertAck` is matched and logged) |
 | | `status` | a `StatusReport` now |
 | | `send <file>` | a `DetectionReport`, `Alert`, or `StatusReport` from a file |
 | | `quit` | a GoodBye `StatusReport`, then ends the session |
-| C2 Node (`dmm`) | `task [mode]` | a `mode_change` `Task`, to `mode` or another registered mode |
+| Fusion Node (`fusion`) | `task [mode]` | a `mode_change` `Task`, to `mode` or another registered mode |
 | | `send <file>` | a `Task` from a file |
 | | `quit` | ends the session |
 

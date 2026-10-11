@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The harness now uses the BSI Flex 335 v2.0 node names throughout:
+  `--role edge` (was `asm`) and `--role fusion` (was `dmm`), and "Edge
+  Node"/"Fusion Node" in output, finding messages and docs. `--role asm`
+  and `--role dmm` still work as hidden aliases. Rule IDs are unchanged.
+- **JSON report:** `role` is now `"edge"` or `"fusion"`, and
+  `report_schema_version` is 2. Update anything that reads `role`.
+- `examples/messages/from-c2-node/` is renamed `from-fusion-node/`.
+
 ## 1.0.0-beta.5
 
 ### Added

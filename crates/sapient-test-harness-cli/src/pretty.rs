@@ -92,7 +92,7 @@ pub fn render_verbose(report: &RunReport, color: bool) -> String {
         )
     );
     let _ = writeln!(out, "Target: {}", report.target);
-    let _ = writeln!(out, "Role: {}", report.role.to_string().to_uppercase());
+    let _ = writeln!(out, "Role: {}", report.role.label());
     let _ = writeln!(out, "Suite: {}", suite_label(&report.suite));
     let _ = writeln!(out);
 
@@ -258,7 +258,7 @@ mod tests {
 
     fn report(scenario: ScenarioResult) -> RunReport {
         RunReport::new(
-            Role::Asm,
+            Role::Edge,
             "v2.0".into(),
             "localhost:12002".into(),
             "00000000-0000-4000-8000-000000000000".into(),
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn passing_run_renders_full_checklist() {
-        let mut scenario = ScenarioResult::for_role(Role::Asm);
+        let mut scenario = ScenarioResult::for_role(Role::Edge);
         for check in [
             Check::Registration,
             Check::StatusReport,
@@ -282,7 +282,9 @@ mod tests {
         }
         let text = render_verbose(&report(scenario), false);
         assert!(text.starts_with("SAPIENT Harness v"));
-        assert!(text.contains("Target: localhost:12002\nRole: ASM\nSuite: BSI Flex 335 v2.0\n"));
+        assert!(
+            text.contains("Target: localhost:12002\nRole: Edge Node\nSuite: BSI Flex 335 v2.0\n")
+        );
         assert!(text.contains(
             "✓ Connected\n✓ Registration accepted\n✓ StatusReport\n✓ DetectionReport\n\
              ✓ AlertAck\n✓ Graceful Goodbye\n"
@@ -294,7 +296,7 @@ mod tests {
 
     #[test]
     fn connection_failure_marks_everything_failed() {
-        let mut scenario = ScenarioResult::for_role(Role::Asm);
+        let mut scenario = ScenarioResult::for_role(Role::Edge);
         scenario.record_error(
             "connect",
             io::Error::new(io::ErrorKind::TimedOut, "could not connect"),
@@ -309,7 +311,7 @@ mod tests {
 
     #[test]
     fn colour_wraps_markers_in_ansi_codes() {
-        let scenario = ScenarioResult::for_role(Role::Asm);
+        let scenario = ScenarioResult::for_role(Role::Edge);
         let text = render_verbose(&report(scenario), true);
         assert!(text.contains("\x1b[31m✗\x1b[0m"));
     }

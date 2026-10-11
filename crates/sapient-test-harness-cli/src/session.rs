@@ -67,13 +67,13 @@ Commands:
   task [mode]    send a mode_change Task to `mode`, or by default to a
                  registered mode other than the active one
   send <file>    send a Task from a SapientMessage JSON file
-                 (e.g. examples/messages/from-c2-node/02-task-mode-change.json)
+                 (e.g. examples/messages/from-fusion-node/02-task-mode-change.json)
   help           show this list
   quit           end the session";
 
 pub async fn session(args: SessionArgs) -> ExitCode {
-    if args.role == Role::Dmm && args.detection_interval_secs.is_some() {
-        eprintln!("error: --detection-interval-secs only applies to --role asm");
+    if args.role == Role::Fusion && args.detection_interval_secs.is_some() {
+        eprintln!("error: --detection-interval-secs only applies to --role edge");
         return ExitCode::from(2);
     }
     let harness_node_id = args
@@ -87,11 +87,11 @@ pub async fn session(args: SessionArgs) -> ExitCode {
 
     let connect_timeout = Duration::from_secs(args.connect_timeout_secs);
     let stream = match args.role {
-        Role::Asm => {
+        Role::Edge => {
             eprintln!("Connecting to {}...", args.target);
             connect_with_retries(&args.target, connect_timeout).await
         }
-        Role::Dmm => listen_and_accept(&args.target, connect_timeout).await,
+        Role::Fusion => listen_and_accept(&args.target, connect_timeout).await,
     };
     let stream = match stream {
         Ok(stream) => stream,
@@ -115,18 +115,18 @@ pub async fn session(args: SessionArgs) -> ExitCode {
     };
     log.line(&format!(
         "Session started as {} (node ID {harness_node_id}). Type `help` for commands.",
-        args.role.to_string().to_uppercase()
+        args.role.label()
     ));
 
     let outcome = match args.role {
-        Role::Asm => {
+        Role::Edge => {
             let mut connection =
                 AsmConnection::with_frame_reader(&harness_node_id, reader, writer, frame_reader);
             let outcome = asm_session(&mut connection, &options, &mut log, &mut commands).await;
             log.findings(connection.findings());
             outcome.map(|()| connection.take_findings())
         }
-        Role::Dmm => {
+        Role::Fusion => {
             let mut connection =
                 DmmConnection::with_frame_reader(&harness_node_id, reader, writer, frame_reader)
                     .with_allowed_status_report_intervals(args.allowed_status_report_intervals);
@@ -220,7 +220,7 @@ where
             },
             polled = connection.poll_once() => {
                 if !polled? {
-                    log.line("DMM disconnected.");
+                    log.line("Fusion Node disconnected.");
                     return Ok(());
                 }
                 log.received(connection.last_inbound(), connection.last_reply());
@@ -239,7 +239,7 @@ where
                         next_detection = options.detection_interval.map(|interval| Instant::now() + interval);
                     }
                     Some(AsmEvent::RegistrationRejected) => {
-                        log.error("The DMM rejected our Registration; ending the session.");
+                        log.error("The Fusion Node rejected our Registration; ending the session.");
                         return Ok(());
                     }
                     Some(AsmEvent::RegistrationFailed) => {
@@ -324,7 +324,7 @@ where
                     log.sent("StatusReport", status.report_id.as_deref());
                 }
                 other => log.error(&format!(
-                    "The ASM role can send a DetectionReport, Alert, or StatusReport here, not {}. \
+                    "As an Edge Node the harness can send a DetectionReport, Alert, or StatusReport here, not {}. \
                      Use `sapient-harness send` for arbitrary raw messages.",
                     content_name(other.as_ref())
                 )),
@@ -405,7 +405,7 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    log.line("Waiting for the ASM's Registration.");
+    log.line("Waiting for the Edge Node's Registration.");
     let mut commands_open = true;
     let mut ctrl_c = std::pin::pin!(tokio::signal::ctrl_c());
 
@@ -429,7 +429,7 @@ where
             },
             polled = connection.poll_once() => {
                 if !polled? {
-                    log.line("ASM disconnected.");
+                    log.line("Edge Node disconnected.");
                     return Ok(());
                 }
                 log.received(connection.last_inbound(), connection.last_reply());
@@ -450,7 +450,7 @@ where
                         log.line(&format!("Task {task_id} acknowledged."));
                     }
                     Some(DmmEvent::GoodbyeReceived) => {
-                        log.line("The ASM sent GoodBye; waiting for it to re-register or disconnect.");
+                        log.line("The Edge Node sent GoodBye; waiting for it to re-register or disconnect.");
                     }
                     Some(DmmEvent::StatusReportValidated) | None => {}
                 }
@@ -479,7 +479,7 @@ where
         "help" => log.raw(DMM_HELP),
         "quit" | "exit" => return Ok(Flow::Quit),
         "task" | "send" if contract.is_none() => {
-            log.error("The ASM isn't registered yet.");
+            log.error("The Edge Node isn't registered yet.");
         }
         "task" => {
             let target_mode = if argument.is_empty() {
@@ -519,7 +519,7 @@ where
                     send_task(connection, options, log, task, None).await?;
                 }
                 other => log.error(&format!(
-                    "The DMM role can send a Task here, not {}. Use `sapient-harness send` \
+                    "As a Fusion Node the harness can send a Task here, not {}. Use `sapient-harness send` \
                      for arbitrary raw messages.",
                     content_name(other.as_ref())
                 )),
