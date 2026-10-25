@@ -10,6 +10,24 @@
 
 ### Changed
 
+- `RULES.md` lists every rule built by a shared validator (locations,
+  range-bearings, durations, associated files and detections, task
+  parameters) by its full rule ID and message, under the message type that
+  uses it. It replaces the per-file prefix lists and the hand-kept
+  "Composite validator suffixes" section, which had fallen out of date:
+  it was missing the finite-number checks (e.g. `alert.location.x.invalid`),
+  `*.associated_detection.association_type.invalid` and
+  `task.*.parameter.value.invalid`. `scripts/generate-rules.sh` now finds
+  these rules by following the validators in source, and fails if it can't.
+- Clearer messages for four Registration rules that said a field "must be
+  specified" when it was present but invalid:
+  `registration.region_definition.region_type.invalid`,
+  `registration.location_type.units.invalid`,
+  `registration.location_type.datum.invalid` and
+  `registration.filter_parameter.operators.invalid`. Rule IDs are
+  unchanged.
+- Fixed the spelling of "definition" in the `registration.node_definition.*`
+  messages.
 - `send --role edge` now retries a failed connection every second until
   `--connect-timeout-secs` runs out, like `run` and `session`, instead of
   failing on the first refusal.

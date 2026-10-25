@@ -76,7 +76,7 @@ fn validate_node_definition(node_definitions: Vec<NodeDefinition>) -> Validation
     if node_definitions.is_empty() {
         return ValidationOutcome::fail(
             "registration.node_definition.empty",
-            "Node type must be specified in node defintition.",
+            "Node type must be specified in node definition.",
         );
     }
     for node_definition in node_definitions {
@@ -85,7 +85,7 @@ fn validate_node_definition(node_definitions: Vec<NodeDefinition>) -> Validation
             node_definition.node_type,
             20,
             "registration.node_definition.node_type.missing",
-            "Node type must be specified in node defintition.",
+            "Node type must be specified in node definition.",
         );
         if !node_type_validation.passed {
             return node_type_validation;
@@ -487,12 +487,12 @@ fn validate_location_type(location_type: LocationType) -> ValidationOutcome {
         LocationUnits(units) => validate_location_coordinate_system(
             Some(units),
             "registration.location_type.units.invalid",
-            "Units must be specified in location type.",
+            "Units are not a valid option in location type.",
         ),
         RangeBearingUnits(units) => validate_range_bearing_coordinate_system(
             Some(units),
             "registration.location_type.units.invalid",
-            "Units must be specified in location type.",
+            "Units are not a valid option in location type.",
         ),
     };
     if !valid_units.passed {
@@ -517,7 +517,7 @@ fn validate_coordinate_datum(datum: i32) -> ValidationOutcome {
     validate_nonzero(
         datum,
         "registration.location_type.datum.invalid",
-        "Datum must be specified in location type.",
+        "Datum must not be unspecified (0) in location type.",
     )
 }
 
@@ -584,7 +584,7 @@ fn validate_region_definition(region_definition: RegionDefinition) -> Validation
         if !(1..=5).contains(&region_type) {
             return ValidationOutcome::fail(
                 "registration.region_definition.region_type.invalid",
-                "Region type must be specified in region definition.",
+                "Region type is not a valid option in region definition.",
             );
         }
     }
@@ -1058,7 +1058,7 @@ fn validate_filter_parameter(filter_parameter: FilterParameter) -> ValidationOut
     {
         return ValidationOutcome::fail(
             "registration.filter_parameter.operators.invalid",
-            "Filter parameter operators must be specified.",
+            "Filter parameter operators must be specified, and each must be a valid option.",
         );
     }
 
@@ -1371,7 +1371,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.node_definition.node_type.missing",
-                "Node type must be specified in node defintition."
+                "Node type must be specified in node definition."
             ),
             validate_node_definition(vec![invalid_node_definition])
         );
@@ -1380,7 +1380,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.node_definition.empty",
-                "Node type must be specified in node defintition."
+                "Node type must be specified in node definition."
             ),
             validate_node_definition(vec![])
         );
@@ -1394,7 +1394,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.node_definition.node_type.missing",
-                "Node type must be specified in node defintition."
+                "Node type must be specified in node definition."
             ),
             validate_node_definition(vec![undefined_node_type])
         );
@@ -2180,7 +2180,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.location_type.units.invalid",
-                "Units must be specified in location type."
+                "Units are not a valid option in location type."
             ),
             validate_location_type(invalid_location_type)
         );
@@ -2263,7 +2263,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.location_type.datum.invalid",
-                "Datum must be specified in location type."
+                "Datum must not be unspecified (0) in location type."
             ),
             validate_coordinate_datum(0)
         );
@@ -2421,7 +2421,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.region_definition.region_type.invalid",
-                "Region type must be specified in region definition."
+                "Region type is not a valid option in region definition."
             ),
             validate_task_definition(Some(invalid_region_type_task_definition))
         );
@@ -2460,7 +2460,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.region_definition.region_type.invalid",
-                "Region type must be specified in region definition."
+                "Region type is not a valid option in region definition."
             ),
             validate_region_definition(invalid_type_region_definition)
         );
@@ -2501,7 +2501,7 @@ mod registration_validation_tests {
         assert_eq!(
             ValidationOutcome::fail(
                 "registration.location_type.datum.invalid",
-                "Datum must be specified in location type."
+                "Datum must not be unspecified (0) in location type."
             ),
             validate_region_definition(invalid_area_region_definition)
         );

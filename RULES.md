@@ -41,16 +41,16 @@ Every rule ID follows `<message_type>.<field>.<violation_kind>`, where `violatio
 | `registration.enu_velocity_units.up_rate_units.invalid` | Up rate units is not a valid option in velocity type. |
 | `registration.extension_subclass.subclass_name.missing` | Extension subclass name must be specified. |
 | `registration.extension_subclass.subclass_namespace.missing` | Extension subclass namespace must be specified. |
-| `registration.filter_parameter.operators.invalid` | Filter parameter operators must be specified. |
+| `registration.filter_parameter.operators.invalid` | Filter parameter operators must be specified, and each must be a valid option. |
 | `registration.filter_parameter.parameter.missing` | Filter parameter name must be specified. |
 | `registration.geometric_error.type.missing` | Geometric error type must be specified. |
 | `registration.geometric_error.units.missing` | Geometric error units must be specified. |
 | `registration.geometric_error.variation_type.missing` | Geometric error variation type must be specified. |
 | `registration.icd_version.invalid` | ICD version specified in registration is not a valid option. |
 | `registration.icd_version.missing` | No ICD version specified in registration message |
-| `registration.location_type.datum.invalid` | Datum must be specified in location type. |
+| `registration.location_type.datum.invalid` | Datum must not be unspecified (0) in location type. |
 | `registration.location_type.datum.missing` | Datum must be specified in location type. |
-| `registration.location_type.units.invalid` | Units must be specified in location type. |
+| `registration.location_type.units.invalid` | Units are not a valid option in location type. |
 | `registration.location_type.units.missing` | Units must be specified in location type. |
 | `registration.mode_definition.empty` | Mode definition must be specified in registration. |
 | `registration.mode_definition.mode_name.invalid` | Mode names must be unique so a mode_change Task can address each unambiguously. |
@@ -59,14 +59,14 @@ Every rule ID follows `<message_type>.<field>.<violation_kind>`, where `violatio
 | `registration.mode_definition.settle_time.missing` | Settle time must be specified in mode definition. |
 | `registration.mode_parameter.type.missing` | Mode parameter type must be specified. |
 | `registration.mode_parameter.value.missing` | Mode parameter value must be specified. |
-| `registration.node_definition.empty` | Node type must be specified in node defintition. |
-| `registration.node_definition.node_type.missing` | Node type must be specified in node defintition. |
+| `registration.node_definition.empty` | Node type must be specified in node definition. |
+| `registration.node_definition.node_type.missing` | Node type must be specified in node definition. |
 | `registration.performance_value.type.missing` | Performance value type must be specified. |
 | `registration.performance_value.unit_value.missing` | Performance value unit value must be specified. |
 | `registration.performance_value.units.missing` | Performance value units must be specified. |
 | `registration.region_definition.region_area.empty` | Region area must be specified in region definition. |
 | `registration.region_definition.region_type.empty` | Region type must be specified in region definition. |
-| `registration.region_definition.region_type.invalid` | Region type must be specified in region definition. |
+| `registration.region_definition.region_type.invalid` | Region type is not a valid option in region definition. |
 | `registration.status_definition.missing` | Status definition must be specified in registration. |
 | `registration.status_definition.status_interval.missing` | Status interval must be specified in status definition. |
 | `registration.status_definition.status_report.category.missing` | Status report category must be specified in registration. |
@@ -84,13 +84,46 @@ Every rule ID follows `<message_type>.<field>.<violation_kind>`, where `violatio
 | `registration.velocity_type.datum.missing` | Datum must be specified in velocity type. |
 | `registration.velocity_type.velocity_units.missing` | Velocity units must be specified in velocity type. |
 
-Rule ID prefixes passed to `common.rs`'s composite validators (each combines with a fixed suffix at runtime to build the real rule IDs):
+Built at runtime by shared validators, from the prefixes this file passes them (`registration.status_definition.status_interval`, `registration.mode_definition.settle_time`, `registration.region_definition.settle_time`, `registration.command.completion_time`, `registration.reporting_region`) plus fixed suffixes:
 
-- `registration.status_definition.status_interval.*`
-- `registration.mode_definition.settle_time.*`
-- `registration.region_definition.settle_time.*`
-- `registration.command.completion_time.*`
-- `registration.reporting_region.*`
+| Rule ID | Message |
+|---|---|
+| `registration.command.completion_time.units.missing` | Time Units must be specified. |
+| `registration.command.completion_time.value.invalid` | Duration value must be a finite number 0 or greater. |
+| `registration.command.completion_time.value.missing` | Duration value must be provided. |
+| `registration.mode_definition.settle_time.units.missing` | Time Units must be specified. |
+| `registration.mode_definition.settle_time.value.invalid` | Duration value must be a finite number 0 or greater. |
+| `registration.mode_definition.settle_time.value.missing` | Duration value must be provided. |
+| `registration.region_definition.settle_time.units.missing` | Time Units must be specified. |
+| `registration.region_definition.settle_time.value.invalid` | Duration value must be a finite number 0 or greater. |
+| `registration.region_definition.settle_time.value.missing` | Duration value must be provided. |
+| `registration.reporting_region.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `registration.reporting_region.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `registration.reporting_region.coordinate_system.invalid` | Coordinate system must be specified in range bearing. |
+| `registration.reporting_region.datum.missing` | Datum must be specified in range bearing. |
+| `registration.reporting_region.elevation.invalid` | Value must be a finite number in range bearing. |
+| `registration.reporting_region.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `registration.reporting_region.horizontal_extent.invalid` | Value must be a finite number in range bearing. |
+| `registration.reporting_region.horizontal_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `registration.reporting_region.locations.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `registration.reporting_region.locations.datum.missing` | Datum must be specified in location. |
+| `registration.reporting_region.locations.empty` | At least one location must be specified in location list. |
+| `registration.reporting_region.locations.x.invalid` | Coordinate must be a finite number in location. |
+| `registration.reporting_region.locations.x.missing` | X-coordinate must be specified in location. |
+| `registration.reporting_region.locations.x_error.invalid` | Coordinate must be a finite number in location. |
+| `registration.reporting_region.locations.y.invalid` | Coordinate must be a finite number in location. |
+| `registration.reporting_region.locations.y.missing` | Y-coordinate must be specified in location. |
+| `registration.reporting_region.locations.y_error.invalid` | Coordinate must be a finite number in location. |
+| `registration.reporting_region.locations.z.invalid` | Coordinate must be a finite number in location. |
+| `registration.reporting_region.locations.z_error.invalid` | Coordinate must be a finite number in location. |
+| `registration.reporting_region.missing` | Location or range-bearing must be specified in reporting region. |
+| `registration.reporting_region.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `registration.reporting_region.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `registration.reporting_region.vertical_extent.invalid` | Value must be a finite number in range bearing. |
+| `registration.reporting_region.vertical_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `registration.status_definition.status_interval.units.missing` | Time Units must be specified. |
+| `registration.status_definition.status_interval.value.invalid` | Duration value must be a finite number 0 or greater. |
+| `registration.status_definition.status_interval.value.missing` | Duration value must be provided. |
 
 ## `registration_ack.rs`
 
@@ -113,12 +146,92 @@ Rule ID prefixes passed to `common.rs`'s composite validators (each combines wit
 | `status_report.status.status_type.missing` | Status type must be specified in status report. |
 | `status_report.system.invalid` | System must be specified in status report. |
 
-Rule ID prefixes passed to `common.rs`'s composite validators (each combines with a fixed suffix at runtime to build the real rule IDs):
+Built at runtime by shared validators, from the prefixes this file passes them (`status_report.node_location`, `status_report.field_of_view`, `status_report.coverage`, `status_report.obscuration`) plus fixed suffixes:
 
-- `status_report.node_location.*`
-- `status_report.field_of_view.*`
-- `status_report.coverage.*`
-- `status_report.obscuration.*`
+| Rule ID | Message |
+|---|---|
+| `status_report.coverage.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `status_report.coverage.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.coverage.coordinate_system.invalid` | Coordinate system must be specified in range bearing. |
+| `status_report.coverage.datum.missing` | Datum must be specified in range bearing. |
+| `status_report.coverage.elevation.invalid` | Value must be a finite number in range bearing. |
+| `status_report.coverage.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.coverage.horizontal_extent.invalid` | Value must be a finite number in range bearing. |
+| `status_report.coverage.horizontal_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.coverage.locations.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `status_report.coverage.locations.datum.missing` | Datum must be specified in location. |
+| `status_report.coverage.locations.empty` | At least one location must be specified in location list. |
+| `status_report.coverage.locations.x.invalid` | Coordinate must be a finite number in location. |
+| `status_report.coverage.locations.x.missing` | X-coordinate must be specified in location. |
+| `status_report.coverage.locations.x_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.coverage.locations.y.invalid` | Coordinate must be a finite number in location. |
+| `status_report.coverage.locations.y.missing` | Y-coordinate must be specified in location. |
+| `status_report.coverage.locations.y_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.coverage.locations.z.invalid` | Coordinate must be a finite number in location. |
+| `status_report.coverage.locations.z_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.coverage.missing` | Location or range-bearing must be specified in status report. |
+| `status_report.coverage.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `status_report.coverage.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `status_report.coverage.vertical_extent.invalid` | Value must be a finite number in range bearing. |
+| `status_report.coverage.vertical_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.field_of_view.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `status_report.field_of_view.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.field_of_view.coordinate_system.invalid` | Coordinate system must be specified in range bearing. |
+| `status_report.field_of_view.datum.missing` | Datum must be specified in range bearing. |
+| `status_report.field_of_view.elevation.invalid` | Value must be a finite number in range bearing. |
+| `status_report.field_of_view.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.field_of_view.horizontal_extent.invalid` | Value must be a finite number in range bearing. |
+| `status_report.field_of_view.horizontal_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.field_of_view.locations.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `status_report.field_of_view.locations.datum.missing` | Datum must be specified in location. |
+| `status_report.field_of_view.locations.empty` | At least one location must be specified in location list. |
+| `status_report.field_of_view.locations.x.invalid` | Coordinate must be a finite number in location. |
+| `status_report.field_of_view.locations.x.missing` | X-coordinate must be specified in location. |
+| `status_report.field_of_view.locations.x_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.field_of_view.locations.y.invalid` | Coordinate must be a finite number in location. |
+| `status_report.field_of_view.locations.y.missing` | Y-coordinate must be specified in location. |
+| `status_report.field_of_view.locations.y_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.field_of_view.locations.z.invalid` | Coordinate must be a finite number in location. |
+| `status_report.field_of_view.locations.z_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.field_of_view.missing` | Location or range-bearing must be specified in status report. |
+| `status_report.field_of_view.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `status_report.field_of_view.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `status_report.field_of_view.vertical_extent.invalid` | Value must be a finite number in range bearing. |
+| `status_report.field_of_view.vertical_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.node_location.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `status_report.node_location.datum.missing` | Datum must be specified in location. |
+| `status_report.node_location.x.invalid` | Coordinate must be a finite number in location. |
+| `status_report.node_location.x.missing` | X-coordinate must be specified in location. |
+| `status_report.node_location.x_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.node_location.y.invalid` | Coordinate must be a finite number in location. |
+| `status_report.node_location.y.missing` | Y-coordinate must be specified in location. |
+| `status_report.node_location.y_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.node_location.z.invalid` | Coordinate must be a finite number in location. |
+| `status_report.node_location.z_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.obscuration.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `status_report.obscuration.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.obscuration.coordinate_system.invalid` | Coordinate system must be specified in range bearing. |
+| `status_report.obscuration.datum.missing` | Datum must be specified in range bearing. |
+| `status_report.obscuration.elevation.invalid` | Value must be a finite number in range bearing. |
+| `status_report.obscuration.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.obscuration.horizontal_extent.invalid` | Value must be a finite number in range bearing. |
+| `status_report.obscuration.horizontal_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `status_report.obscuration.locations.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `status_report.obscuration.locations.datum.missing` | Datum must be specified in location. |
+| `status_report.obscuration.locations.empty` | At least one location must be specified in location list. |
+| `status_report.obscuration.locations.x.invalid` | Coordinate must be a finite number in location. |
+| `status_report.obscuration.locations.x.missing` | X-coordinate must be specified in location. |
+| `status_report.obscuration.locations.x_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.obscuration.locations.y.invalid` | Coordinate must be a finite number in location. |
+| `status_report.obscuration.locations.y.missing` | Y-coordinate must be specified in location. |
+| `status_report.obscuration.locations.y_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.obscuration.locations.z.invalid` | Coordinate must be a finite number in location. |
+| `status_report.obscuration.locations.z_error.invalid` | Coordinate must be a finite number in location. |
+| `status_report.obscuration.missing` | Location or range-bearing must be specified in status report. |
+| `status_report.obscuration.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `status_report.obscuration.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `status_report.obscuration.vertical_extent.invalid` | Value must be a finite number in range bearing. |
+| `status_report.obscuration.vertical_extent_error.invalid` | Value must be a finite number in range bearing. |
 
 ## `detection_report.rs`
 
@@ -142,15 +255,54 @@ Rule ID prefixes passed to `common.rs`'s composite validators (each combines wit
 | `detection_report.signal.centre_frequency.missing` | Signal centre frequency must be specified in detection report. |
 | `detection_report.task_id.invalid` | A valid ULID must be used for a task ID in a detection report. |
 
-Rule ID prefixes passed to `common.rs`'s composite validators (each combines with a fixed suffix at runtime to build the real rule IDs):
+Built at runtime by shared validators, from the prefixes this file passes them (`detection_report.location`, `detection_report.prediction_location`, `detection_report.track_info`, `detection_report.object_info`, `detection_report.associated_file`, `detection_report.associated_detection`, `detection_report.classification.sub_class`) plus fixed suffixes:
 
-- `detection_report.location.*`
-- `detection_report.prediction_location.*`
-- `detection_report.track_info.*`
-- `detection_report.object_info.*`
-- `detection_report.associated_file.*`
-- `detection_report.associated_detection.*`
-- `detection_report.classification.sub_class.*`
+| Rule ID | Message |
+|---|---|
+| `detection_report.associated_detection.association_type.invalid` | Association type is not a valid option in associated detection. |
+| `detection_report.associated_detection.node_id.invalid` | A valid UUID v4 must be used for a node ID in a detection report associated detection. |
+| `detection_report.associated_detection.object_id.invalid` | A valid ULID must be used for an object ID in a detection report associated detection. |
+| `detection_report.associated_file.type.missing` | Associated file type must be specified in a detection report. |
+| `detection_report.associated_file.url.missing` | Associated file URL must be specified in a detection report. |
+| `detection_report.classification.sub_class.level.missing` | Classification sub class level must be specified in detection report. |
+| `detection_report.classification.sub_class.type.missing` | Classification sub class type must be specified in detection report. |
+| `detection_report.location.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `detection_report.location.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `detection_report.location.coordinate_system.invalid` | Coordinate system must be specified in location. / Coordinate system must be specified in range bearing. |
+| `detection_report.location.datum.missing` | Datum must be specified in location. / Datum must be specified in range bearing. |
+| `detection_report.location.elevation.invalid` | Value must be a finite number in range bearing. |
+| `detection_report.location.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `detection_report.location.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `detection_report.location.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `detection_report.location.x.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.location.x.missing` | X-coordinate must be specified in location. |
+| `detection_report.location.x_error.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.location.y.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.location.y.missing` | Y-coordinate must be specified in location. |
+| `detection_report.location.y_error.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.location.z.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.location.z_error.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.object_info.type.missing` | Track object info type must be specified in detection report. |
+| `detection_report.object_info.value.missing` | Track object info value must be specified in detection report. |
+| `detection_report.prediction_location.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `detection_report.prediction_location.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `detection_report.prediction_location.coordinate_system.invalid` | Coordinate system must be specified in location. / Coordinate system must be specified in range bearing. |
+| `detection_report.prediction_location.datum.missing` | Datum must be specified in location. / Datum must be specified in range bearing. |
+| `detection_report.prediction_location.elevation.invalid` | Value must be a finite number in range bearing. |
+| `detection_report.prediction_location.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `detection_report.prediction_location.missing` | Predicted location or range-bearing must be specified in detection report. |
+| `detection_report.prediction_location.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `detection_report.prediction_location.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `detection_report.prediction_location.x.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.prediction_location.x.missing` | X-coordinate must be specified in location. |
+| `detection_report.prediction_location.x_error.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.prediction_location.y.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.prediction_location.y.missing` | Y-coordinate must be specified in location. |
+| `detection_report.prediction_location.y_error.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.prediction_location.z.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.prediction_location.z_error.invalid` | Coordinate must be a finite number in location. |
+| `detection_report.track_info.type.missing` | Track object info type must be specified in detection report. |
+| `detection_report.track_info.value.missing` | Track object info value must be specified in detection report. |
 
 ## `task.rs`
 
@@ -171,14 +323,81 @@ Rule ID prefixes passed to `common.rs`'s composite validators (each combines wit
 | `task.sub_class_filter.type.missing` | Type must be specified in sub class filter. |
 | `task.task_id.invalid` | A valid ULID must be used for a task ID in a task message. |
 
-Rule ID prefixes passed to `common.rs`'s composite validators (each combines with a fixed suffix at runtime to build the real rule IDs):
+Built at runtime by shared validators, from the prefixes this file passes them (`task.command.look_at`, `task.command.location_list`, `task.region.region_area`, `task.class_filter.parameter`, `task.sub_class_filter.parameter`, `task.behaviour_filter.parameter`) plus fixed suffixes:
 
-- `task.command.look_at.*`
-- `task.command.location_list.*`
-- `task.region.region_area.*`
-- `task.class_filter.parameter.*`
-- `task.sub_class_filter.parameter.*`
-- `task.behaviour_filter.parameter.*`
+| Rule ID | Message |
+|---|---|
+| `task.behaviour_filter.parameter.name.missing` | Parameter name must be specified. |
+| `task.behaviour_filter.parameter.operator.missing` | Parameter operator must be specified. |
+| `task.behaviour_filter.parameter.value.invalid` | Parameter value must be a finite number. |
+| `task.behaviour_filter.parameter.value.missing` | Parameter value must be specified. |
+| `task.class_filter.parameter.name.missing` | Parameter name must be specified. |
+| `task.class_filter.parameter.operator.missing` | Parameter operator must be specified. |
+| `task.class_filter.parameter.value.invalid` | Parameter value must be a finite number. |
+| `task.class_filter.parameter.value.missing` | Parameter value must be specified. |
+| `task.command.location_list.locations.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `task.command.location_list.locations.datum.missing` | Datum must be specified in location. |
+| `task.command.location_list.locations.empty` | At least one location must be specified in location list. |
+| `task.command.location_list.locations.x.invalid` | Coordinate must be a finite number in location. |
+| `task.command.location_list.locations.x.missing` | X-coordinate must be specified in location. |
+| `task.command.location_list.locations.x_error.invalid` | Coordinate must be a finite number in location. |
+| `task.command.location_list.locations.y.invalid` | Coordinate must be a finite number in location. |
+| `task.command.location_list.locations.y.missing` | Y-coordinate must be specified in location. |
+| `task.command.location_list.locations.y_error.invalid` | Coordinate must be a finite number in location. |
+| `task.command.location_list.locations.z.invalid` | Coordinate must be a finite number in location. |
+| `task.command.location_list.locations.z_error.invalid` | Coordinate must be a finite number in location. |
+| `task.command.look_at.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `task.command.look_at.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `task.command.look_at.coordinate_system.invalid` | Coordinate system must be specified in range bearing. |
+| `task.command.look_at.datum.missing` | Datum must be specified in range bearing. |
+| `task.command.look_at.elevation.invalid` | Value must be a finite number in range bearing. |
+| `task.command.look_at.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `task.command.look_at.horizontal_extent.invalid` | Value must be a finite number in range bearing. |
+| `task.command.look_at.horizontal_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `task.command.look_at.locations.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `task.command.look_at.locations.datum.missing` | Datum must be specified in location. |
+| `task.command.look_at.locations.empty` | At least one location must be specified in location list. |
+| `task.command.look_at.locations.x.invalid` | Coordinate must be a finite number in location. |
+| `task.command.look_at.locations.x.missing` | X-coordinate must be specified in location. |
+| `task.command.look_at.locations.x_error.invalid` | Coordinate must be a finite number in location. |
+| `task.command.look_at.locations.y.invalid` | Coordinate must be a finite number in location. |
+| `task.command.look_at.locations.y.missing` | Y-coordinate must be specified in location. |
+| `task.command.look_at.locations.y_error.invalid` | Coordinate must be a finite number in location. |
+| `task.command.look_at.locations.z.invalid` | Coordinate must be a finite number in location. |
+| `task.command.look_at.locations.z_error.invalid` | Coordinate must be a finite number in location. |
+| `task.command.look_at.missing` | Location or range-bearing must be specified in task message. |
+| `task.command.look_at.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `task.command.look_at.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `task.command.look_at.vertical_extent.invalid` | Value must be a finite number in range bearing. |
+| `task.command.look_at.vertical_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `task.region.region_area.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `task.region.region_area.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `task.region.region_area.coordinate_system.invalid` | Coordinate system must be specified in range bearing. |
+| `task.region.region_area.datum.missing` | Datum must be specified in range bearing. |
+| `task.region.region_area.elevation.invalid` | Value must be a finite number in range bearing. |
+| `task.region.region_area.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `task.region.region_area.horizontal_extent.invalid` | Value must be a finite number in range bearing. |
+| `task.region.region_area.horizontal_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `task.region.region_area.locations.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `task.region.region_area.locations.datum.missing` | Datum must be specified in location. |
+| `task.region.region_area.locations.empty` | At least one location must be specified in location list. |
+| `task.region.region_area.locations.x.invalid` | Coordinate must be a finite number in location. |
+| `task.region.region_area.locations.x.missing` | X-coordinate must be specified in location. |
+| `task.region.region_area.locations.x_error.invalid` | Coordinate must be a finite number in location. |
+| `task.region.region_area.locations.y.invalid` | Coordinate must be a finite number in location. |
+| `task.region.region_area.locations.y.missing` | Y-coordinate must be specified in location. |
+| `task.region.region_area.locations.y_error.invalid` | Coordinate must be a finite number in location. |
+| `task.region.region_area.locations.z.invalid` | Coordinate must be a finite number in location. |
+| `task.region.region_area.locations.z_error.invalid` | Coordinate must be a finite number in location. |
+| `task.region.region_area.missing` | Location or range-bearing must be specified in task message. |
+| `task.region.region_area.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `task.region.region_area.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `task.region.region_area.vertical_extent.invalid` | Value must be a finite number in range bearing. |
+| `task.region.region_area.vertical_extent_error.invalid` | Value must be a finite number in range bearing. |
+| `task.sub_class_filter.parameter.name.missing` | Parameter name must be specified. |
+| `task.sub_class_filter.parameter.operator.missing` | Parameter operator must be specified. |
+| `task.sub_class_filter.parameter.value.invalid` | Parameter value must be a finite number. |
+| `task.sub_class_filter.parameter.value.missing` | Parameter value must be specified. |
 
 ## `task_ack.rs`
 
@@ -187,9 +406,12 @@ Rule ID prefixes passed to `common.rs`'s composite validators (each combines wit
 | `task_ack.task_id.invalid` | A valid ULID must be used for a task ID in a task ack message. |
 | `task_ack.task_status.invalid` | Task status must be specified in a task ack message. |
 
-Rule ID prefixes passed to `common.rs`'s composite validators (each combines with a fixed suffix at runtime to build the real rule IDs):
+Built at runtime by shared validators, from the prefixes this file passes them (`task_ack.associated_file`) plus fixed suffixes:
 
-- `task_ack.associated_file.*`
+| Rule ID | Message |
+|---|---|
+| `task_ack.associated_file.type.missing` | Associated file type must be specified in a task ack message. |
+| `task_ack.associated_file.url.missing` | Associated file URL must be specified in a task ack message. |
 
 ## `alert.rs`
 
@@ -203,12 +425,33 @@ Rule ID prefixes passed to `common.rs`'s composite validators (each combines wit
 | `alert.region_id.invalid` | A valid ULID must be used for a region ID in an alert message. |
 | `alert.status.invalid` | Alert status is not a valid option in an alert message. |
 
-Rule ID prefixes passed to `common.rs`'s composite validators (each combines with a fixed suffix at runtime to build the real rule IDs):
+Built at runtime by shared validators, from the prefixes this file passes them (`alert.associated_file`, `alert.associated_detection`, `alert.location`, `alert.range_bearing`) plus fixed suffixes:
 
-- `alert.associated_file.*`
-- `alert.associated_detection.*`
-- `alert.location.*`
-- `alert.range_bearing.*`
+| Rule ID | Message |
+|---|---|
+| `alert.associated_detection.association_type.invalid` | Association type is not a valid option in associated detection. |
+| `alert.associated_detection.node_id.invalid` | A valid UUID v4 must be used for a node ID in an alert associated detection. |
+| `alert.associated_detection.object_id.invalid` | A valid ULID must be used for an object ID in an alert associated detection. |
+| `alert.associated_file.type.missing` | Associated file type must be specified in an alert message. |
+| `alert.associated_file.url.missing` | Associated file URL must be specified in an alert message. |
+| `alert.location.coordinate_system.invalid` | Coordinate system must be specified in location. |
+| `alert.location.datum.missing` | Datum must be specified in location. |
+| `alert.location.x.invalid` | Coordinate must be a finite number in location. |
+| `alert.location.x.missing` | X-coordinate must be specified in location. |
+| `alert.location.x_error.invalid` | Coordinate must be a finite number in location. |
+| `alert.location.y.invalid` | Coordinate must be a finite number in location. |
+| `alert.location.y.missing` | Y-coordinate must be specified in location. |
+| `alert.location.y_error.invalid` | Coordinate must be a finite number in location. |
+| `alert.location.z.invalid` | Coordinate must be a finite number in location. |
+| `alert.location.z_error.invalid` | Coordinate must be a finite number in location. |
+| `alert.range_bearing.azimuth.invalid` | Value must be a finite number in range bearing. |
+| `alert.range_bearing.azimuth_error.invalid` | Value must be a finite number in range bearing. |
+| `alert.range_bearing.coordinate_system.invalid` | Coordinate system must be specified in range bearing. |
+| `alert.range_bearing.datum.missing` | Datum must be specified in range bearing. |
+| `alert.range_bearing.elevation.invalid` | Value must be a finite number in range bearing. |
+| `alert.range_bearing.elevation_error.invalid` | Value must be a finite number in range bearing. |
+| `alert.range_bearing.range.invalid` | Range must be a finite number 0 or greater in range bearing. |
+| `alert.range_bearing.range_error.invalid` | Range must be a finite number 0 or greater in range bearing. |
 
 ## `alert_ack.rs`
 
@@ -230,22 +473,6 @@ Rule ID prefixes passed to `common.rs`'s composite validators (each combines wit
 | Rule ID | Message |
 |---|---|
 | `task.follow_object.follow_object_id.invalid` | A valid ULID must be used for a follow object ID in a follow object message. |
-
-## Composite validator suffixes
-
-Each prefix above is combined with these suffixes by the named function (in `common.rs` unless noted otherwise) to build the fully-resolved rule IDs actually produced at runtime.
-
-- `common.rs::validate_location`: .x.missing, .y.missing, .coordinate_system.invalid, .datum.missing
-- `common.rs::validate_range_bearing`: .coordinate_system.invalid, .datum.missing
-- `common.rs::validate_range_bearing_cone`: .coordinate_system.invalid, .datum.missing
-- `common.rs::validate_location_or_range_bearing`: .missing, (delegates to validate_range_bearing_cone / validate_location_list)
-- `common.rs::validate_location_list`: .locations.empty, (delegates to validate_location with "{prefix}.locations")
-- `common.rs::validate_associated_detection`: .node_id.invalid, .object_id.invalid
-- `common.rs::validate_associated_file`: .type.missing, .url.missing
-- `task.rs::validate_parameter (local, not common.rs)`: .name.missing, .operator.missing, .value.missing
-- `detection_report.rs::validate_sub_class (local, not common.rs)`: .type.missing, .level.missing
-- `detection_report.rs::validate_track_object_info (local, not common.rs)`: .type.missing, .value.missing
-- `registration.rs::validate_duration_units / validate_duration_value (local, not common.rs; KI-025) -- shared by validate_status_interval and validate_settle_time, called with each of the four prefixes below`: .units.missing, .value.missing, .value.invalid
 
 ## Session-layer findings
 

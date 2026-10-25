@@ -46,11 +46,27 @@ cat >"$tmp_dir/src/main.rs" <<'RUST_EOF'
 //!    is a fully-resolved rule ID -- pair it with the next prose-shaped
 //!    string literal that follows it (best-effort; the two are adjacent
 //!    call arguments in every current call site).
-//! 4. Anything else (e.g. `"alert.location"`) is a *prefix* passed to one
-//!    of `common.rs`'s composite validators (`validate_location`,
-//!    `validate_associated_file`, ...), which appends a fixed suffix
-//!    internally to build the real rule IDs at runtime -- those are
-//!    listed separately with the suffixes they combine with.
+//! 4. Anything else (e.g. `"alert.location"`) is a *prefix* passed to a
+//!    composite validator (`validate_location`, `validate_associated_file`,
+//!    ...), which appends fixed suffixes to it at runtime. Those rules are
+//!    listed in full under the file that passes the prefix -- see below.
+//!
+//! **Composite validators** are found and followed mechanically, so their
+//! rules can't drift from the code the way a hand-kept suffix list did. A
+//! composite is any function in `validation/*.rs` with a `rule_id_prefix`
+//! parameter. Starting from each call that passes it a literal prefix,
+//! [`Validators::expand`] collects:
+//! - every `format!("{rule_id_prefix}<suffix>")` it fails with, paired with
+//!   the message argument after it -- a literal, or a parameter the caller
+//!   fills in (e.g. `validate_associated_file`'s `type_error`);
+//! - `{field}` suffixes, expanded from the `for (value, field) in [...]`
+//!   list just before them;
+//! - calls on to other composites (by local name, or by a `use ... as ...`
+//!   alias of a `common.rs` function), with the prefix passed through as is
+//!   or extended (`&format!("{rule_id_prefix}.locations")`).
+//!
+//! The run fails if a prefix or message can't be resolved, or if the
+//! literal prefixes step 4 finds differ from the ones followed here.
 //!
 //! **`state.rs`/`asm_state.rs`** (session rules): a much wider, freeform
 //! vocabulary of trailing words (`interval_exceeded`, `duplicate_id`,
@@ -69,7 +85,7 @@ cat >"$tmp_dir/src/main.rs" <<'RUST_EOF'
 //! check, rather than RULES.md silently going stale again.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
@@ -100,60 +116,6 @@ const SESSION_FILES: &[(&str, &str)] = &[
     ("asm_state.rs", "Edge Node role (`AsmSession`)"),
 ];
 
-/// Composite validators (in `common.rs`, reused across files, or local to
-/// one file) that take a caller-supplied `rule_id_prefix` and append one
-/// of these fixed suffixes internally. Kept as a small hand-maintained
-/// table since these functions are few and stable -- see the named
-/// source file for ground truth.
-const PREFIX_SUFFIXES: &[(&str, &[&str])] = &[
-    (
-        "common.rs::validate_location",
-        &[".x.missing", ".y.missing", ".coordinate_system.invalid", ".datum.missing"],
-    ),
-    (
-        "common.rs::validate_range_bearing",
-        &[".coordinate_system.invalid", ".datum.missing"],
-    ),
-    (
-        "common.rs::validate_range_bearing_cone",
-        &[".coordinate_system.invalid", ".datum.missing"],
-    ),
-    (
-        "common.rs::validate_location_or_range_bearing",
-        &[".missing", "(delegates to validate_range_bearing_cone / validate_location_list)"],
-    ),
-    (
-        "common.rs::validate_location_list",
-        &[".locations.empty", "(delegates to validate_location with \"{prefix}.locations\")"],
-    ),
-    (
-        "common.rs::validate_associated_detection",
-        &[".node_id.invalid", ".object_id.invalid"],
-    ),
-    (
-        "common.rs::validate_associated_file",
-        &[".type.missing", ".url.missing"],
-    ),
-    (
-        "task.rs::validate_parameter (local, not common.rs)",
-        &[".name.missing", ".operator.missing", ".value.missing"],
-    ),
-    (
-        "detection_report.rs::validate_sub_class (local, not common.rs)",
-        &[".type.missing", ".level.missing"],
-    ),
-    (
-        "detection_report.rs::validate_track_object_info (local, not common.rs)",
-        &[".type.missing", ".value.missing"],
-    ),
-    (
-        "registration.rs::validate_duration_units / validate_duration_value (local, not \
-         common.rs; KI-025) -- shared by validate_status_interval and validate_settle_time, \
-         called with each of the four prefixes below",
-        &[".units.missing", ".value.missing", ".value.invalid"],
-    ),
-];
-
 struct Rule {
     id: String,
     message: Option<String>,
@@ -175,6 +137,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rule_id_re = Regex::new(r#""([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)""#)?;
     let violation_kinds = ["missing", "invalid", "malformed", "empty"];
+
+    let validators = Validators::load(&validation_dir)?;
+    let (composite_rules, followed_prefixes) = validators.expand_entry_points()?;
 
     let mut out = String::new();
     writeln!(out, "# Conformance rule catalog")?;
@@ -205,7 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
         let production_code = strip_test_module(&content);
 
-        let (mut resolved, mut prefixes) = (Vec::new(), Vec::new());
+        let (mut resolved, mut prefixes) = (Vec::new(), Vec::<String>::new());
         let mut seen_resolved = BTreeMap::new();
         let mut seen_prefixes = Vec::new();
 
@@ -240,7 +205,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             prefixes.push(prefix);
         }
 
-        if resolved.is_empty() && prefixes.is_empty() {
+        let composite = composite_rules.get(*file_name);
+        if resolved.is_empty() && composite.is_none() {
             continue;
         }
 
@@ -257,33 +223,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(out)?;
         }
 
-        if !prefixes.is_empty() {
+        if let Some(composite) = composite {
+            let file_prefixes: Vec<String> =
+                prefixes.iter().map(|prefix| format!("`{prefix}`")).collect();
             writeln!(
                 out,
-                "Rule ID prefixes passed to `common.rs`'s composite validators (each \
-                 combines with a fixed suffix at runtime to build the real rule IDs):"
+                "Built at runtime by shared validators, from the prefixes this file passes \
+                 them ({}) plus fixed suffixes:",
+                file_prefixes.join(", ")
             )?;
             writeln!(out)?;
-            for prefix in &prefixes {
-                writeln!(out, "- `{prefix}.*`")?;
+            writeln!(out, "| Rule ID | Message |")?;
+            writeln!(out, "|---|---|")?;
+            for (id, messages) in composite {
+                // One ID reached by more than one path (e.g. a location or a
+                // range-bearing) can carry more than one message.
+                writeln!(out, "| `{id}` | {} |", messages.join(" / "))?;
             }
             writeln!(out)?;
         }
     }
 
-    writeln!(out, "## Composite validator suffixes")?;
-    writeln!(out)?;
-    writeln!(
-        out,
-        "Each prefix above is combined with these suffixes by the named function \
-         (in `common.rs` unless noted otherwise) to build the fully-resolved rule IDs \
-         actually produced at runtime."
-    )?;
-    writeln!(out)?;
-    for (function, suffixes) in PREFIX_SUFFIXES {
-        writeln!(out, "- `{function}`: {}", suffixes.join(", "))?;
+    // Step 4's literal prefixes and the calls followed must be the same set:
+    // a prefix only one side sees is a call the expansion missed or misread.
+    let literal_prefixes: BTreeSet<&String> = known_prefixes.iter().collect();
+    let followed: BTreeSet<&String> = followed_prefixes.iter().collect();
+    if literal_prefixes != followed {
+        return Err(format!(
+            "composite expansion disagrees with the literal rule ID prefixes:\n  \
+             literal but not followed: {:?}\n  followed but not literal: {:?}",
+            literal_prefixes.difference(&followed).collect::<Vec<_>>(),
+            followed.difference(&literal_prefixes).collect::<Vec<_>>()
+        )
+        .into());
     }
-    writeln!(out)?;
 
     writeln!(out, "## Session-layer findings")?;
     writeln!(out)?;
@@ -326,6 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut known_rule_ids = known_payload_rule_ids;
     known_rule_ids.extend(session_rule_ids);
+    known_rule_ids.extend(composite_rules.values().flat_map(|rules| rules.keys().cloned()));
     check_completeness(
         &repo_root,
         &rule_id_re,
@@ -338,6 +312,395 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(repo_root.join("RULES.md"), out)?;
 
     Ok(())
+}
+
+/// A composite validator: a function with a `rule_id_prefix` parameter that
+/// builds rule IDs at runtime by appending fixed suffixes to it.
+struct Composite {
+    file: String,
+    params: Vec<String>,
+    /// Everything after the parameter list, up to the next function.
+    body: String,
+}
+
+/// (file name, function name) of a composite validator.
+type CompositeKey = (String, String);
+
+/// A call to a composite validator.
+struct Call {
+    callee: CompositeKey,
+    args: Vec<String>,
+    /// Positions of the argument list's opening and closing parentheses.
+    span: (usize, usize),
+}
+
+/// Where a composite's rule message comes from: a literal next to the rule
+/// ID, or one of its parameters, which the caller fills in.
+#[derive(Clone)]
+enum MessageSource {
+    Literal(String),
+    Param(String),
+}
+
+/// Rule ID -> its message(s).
+type ExpandedRules = BTreeMap<String, Vec<String>>;
+
+/// Per file, the rules its calls to composites produce; plus every prefix
+/// those calls pass.
+type Expansion = (BTreeMap<String, ExpandedRules>, Vec<String>);
+
+/// The composite validators in `validation/*.rs`, each file's production
+/// code, and the names each file can call them by.
+struct Validators {
+    composites: BTreeMap<CompositeKey, Composite>,
+    /// Per file: callable name -> composite. A local function shadows an
+    /// imported one of the same name, as in Rust.
+    scopes: BTreeMap<String, BTreeMap<String, CompositeKey>>,
+    code: BTreeMap<String, String>,
+}
+
+impl Validators {
+    fn load(validation_dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let fn_re = Regex::new(r"(?m)^(?:pub )?fn (\w+)")?;
+        let import_re =
+            Regex::new(r"(?s)use crate::validation::common::(\{[^}]*\}|\w+(?:\s+as\s+\w+)?)\s*;")?;
+        let mut composites = BTreeMap::new();
+        let mut code = BTreeMap::new();
+        let mut imports: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+
+        for file_name in FILE_ORDER {
+            let path = validation_dir.join(file_name);
+            let content = fs::read_to_string(&path)
+                .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+            let production_code = strip_test_module(&content).to_string();
+
+            let starts: Vec<(usize, String)> = fn_re
+                .captures_iter(&production_code)
+                .map(|capture| (capture.get(0).unwrap().start(), capture[1].to_string()))
+                .collect();
+            for (index, (start, name)) in starts.iter().enumerate() {
+                let end = starts.get(index + 1).map_or(production_code.len(), |(next, _)| *next);
+                let item = &production_code[*start..end];
+                let open = item
+                    .find('(')
+                    .ok_or_else(|| format!("{file_name}: no parameter list for fn {name}"))?;
+                let close = matching_close(item, open)
+                    .ok_or_else(|| format!("{file_name}: unbalanced parameters for fn {name}"))?;
+                let params: Vec<String> = split_top_level(&item[open + 1..close])
+                    .iter()
+                    .map(|param| {
+                        let name = param.split(':').next().unwrap_or_default().trim();
+                        name.trim_start_matches("mut ").to_string()
+                    })
+                    .collect();
+                if params.iter().any(|param| param == "rule_id_prefix") {
+                    composites.insert(
+                        (file_name.to_string(), name.clone()),
+                        Composite {
+                            file: file_name.to_string(),
+                            params,
+                            body: item[close + 1..].to_string(),
+                        },
+                    );
+                }
+            }
+
+            for capture in import_re.captures_iter(&production_code) {
+                let list = capture[1].trim_matches(|c| c == '{' || c == '}');
+                for item in list.split(',').map(str::trim).filter(|item| !item.is_empty()) {
+                    let words: Vec<&str> = item.split_whitespace().collect();
+                    let alias = match words.as_slice() {
+                        [_, "as", alias] => alias.to_string(),
+                        _ => words[0].to_string(),
+                    };
+                    imports
+                        .entry(file_name.to_string())
+                        .or_default()
+                        .push((alias, words[0].to_string()));
+                }
+            }
+            code.insert(file_name.to_string(), production_code);
+        }
+
+        let mut scopes: BTreeMap<String, BTreeMap<String, CompositeKey>> = BTreeMap::new();
+        for file_name in FILE_ORDER {
+            let scope = scopes.entry(file_name.to_string()).or_default();
+            for (alias, original) in imports.get(*file_name).into_iter().flatten() {
+                let key = ("common.rs".to_string(), original.clone());
+                if composites.contains_key(&key) {
+                    scope.insert(alias.clone(), key);
+                }
+            }
+            for (file, name) in composites.keys() {
+                if file == file_name {
+                    scope.insert(name.clone(), (file.clone(), name.clone()));
+                }
+            }
+        }
+
+        Ok(Self { composites, scopes, code })
+    }
+
+    /// Follows every call that passes a literal prefix to a composite, and
+    /// returns the rules each file's calls produce, plus the prefixes used.
+    fn expand_entry_points(
+        &self,
+    ) -> Result<Expansion, Box<dyn std::error::Error>> {
+        let mut rules: BTreeMap<String, ExpandedRules> = BTreeMap::new();
+        let mut prefixes = Vec::new();
+        for (file_name, code) in &self.code {
+            for call in self.find_calls(file_name, code) {
+                let callee = &self.composites[&call.callee];
+                let index = callee.params.iter().position(|param| param == "rule_id_prefix");
+                let arg = index.and_then(|index| call.args.get(index)).map_or("", String::as_str);
+                if string_literal(arg).is_none() {
+                    // A composite passing on its own prefix is followed from
+                    // its caller; any other prefix can't be read from source.
+                    if prefix_value(arg, Some("")).is_some() {
+                        continue;
+                    }
+                    return Err(format!(
+                        "{file_name}: {} is passed a rule ID prefix this generator can't \
+                         read ({arg:?}); pass a string literal",
+                        call.callee.1
+                    )
+                    .into());
+                }
+                let (prefix, env) = self
+                    .bind(&call, None, &BTreeMap::new())
+                    .map_err(|err| format!("{file_name}: {err}"))?;
+                if !prefixes.contains(&prefix) {
+                    prefixes.push(prefix.clone());
+                }
+                let file_rules = rules.entry(file_name.clone()).or_default();
+                self.expand(&call.callee, &prefix, &env, &mut Vec::new(), file_rules)?;
+            }
+        }
+        Ok((rules, prefixes))
+    }
+
+    /// Collects the rules `key` produces when called with `prefix`, and with
+    /// `env` binding its message parameters, including through the
+    /// composites it calls.
+    fn expand(
+        &self,
+        key: &CompositeKey,
+        prefix: &str,
+        env: &BTreeMap<String, String>,
+        stack: &mut Vec<(CompositeKey, String)>,
+        out: &mut ExpandedRules,
+    ) -> Result<(), String> {
+        let frame = (key.clone(), prefix.to_string());
+        if stack.contains(&frame) {
+            return Ok(()); // recursion with the same prefix, e.g. nested sub-classes
+        }
+        stack.push(frame);
+
+        let composite = &self.composites[key];
+        let calls = self.find_calls(&composite.file, &composite.body);
+        for (suffix, source) in emitted_rules(composite, &calls)? {
+            let message = match source {
+                MessageSource::Literal(text) => text,
+                MessageSource::Param(param) => env.get(&param).cloned().ok_or_else(|| {
+                    format!("{}::{}: no caller passes `{param}` (prefix {prefix:?})", key.0, key.1)
+                })?,
+            };
+            let messages = out.entry(format!("{prefix}{suffix}")).or_default();
+            if !messages.contains(&message) {
+                messages.push(message);
+            }
+        }
+        for call in &calls {
+            let (callee_prefix, callee_env) = self
+                .bind(call, Some(prefix), env)
+                .map_err(|err| format!("{}::{}: {err}", key.0, key.1))?;
+            self.expand(&call.callee, &callee_prefix, &callee_env, stack, out)?;
+        }
+
+        stack.pop();
+        Ok(())
+    }
+
+    /// The prefix and message parameters `call` passes to its callee, given
+    /// the caller's own prefix and bound parameters.
+    fn bind(
+        &self,
+        call: &Call,
+        current_prefix: Option<&str>,
+        env: &BTreeMap<String, String>,
+    ) -> Result<(String, BTreeMap<String, String>), String> {
+        let callee = &self.composites[&call.callee];
+        let mut prefix = None;
+        let mut callee_env = BTreeMap::new();
+        for (param, arg) in callee.params.iter().zip(&call.args) {
+            if param == "rule_id_prefix" {
+                prefix = prefix_value(arg, current_prefix);
+            } else if let Some(text) = string_literal(arg) {
+                callee_env.insert(param.clone(), text);
+            } else if let Some(text) = env.get(arg.as_str()) {
+                callee_env.insert(param.clone(), text.clone());
+            }
+        }
+        let prefix = prefix.ok_or_else(|| {
+            format!("can't resolve the rule ID prefix passed to {}", call.callee.1)
+        })?;
+        Ok((prefix, callee_env))
+    }
+
+    /// Calls in `text` (from `file_name`) to composite validators.
+    fn find_calls(&self, file_name: &str, text: &str) -> Vec<Call> {
+        let call_re = Regex::new(r"\b([a-z_][a-z0-9_]*)\s*\(").unwrap();
+        let scope = &self.scopes[file_name];
+        let mut calls = Vec::new();
+        for capture in call_re.captures_iter(text) {
+            let name = capture.get(1).unwrap();
+            let Some(callee) = scope.get(name.as_str()) else {
+                continue;
+            };
+            if text[..name.start()].trim_end().ends_with("fn") {
+                continue; // a definition, not a call
+            }
+            let open = capture.get(0).unwrap().end() - 1;
+            let Some(close) = matching_close(text, open) else {
+                continue;
+            };
+            calls.push(Call {
+                callee: callee.clone(),
+                args: split_top_level(&text[open + 1..close]),
+                span: (open, close),
+            });
+        }
+        calls
+    }
+}
+
+/// The `(suffix, message)` pairs a composite fails with directly, i.e. its
+/// `format!("{rule_id_prefix}...")` rule IDs that aren't arguments to a
+/// further composite call (those are prefixes, followed separately).
+fn emitted_rules(
+    composite: &Composite,
+    calls: &[Call],
+) -> Result<Vec<(String, MessageSource)>, String> {
+    let emit_re = Regex::new(r#"format!\(\s*"\{rule_id_prefix\}([^"]*)"\s*\)"#).unwrap();
+    let message_re =
+        Regex::new(r#"(?s)^\s*,\s*(?:"((?:[^"\\]|\\.)*)"|([a-z_][a-z0-9_]*)\b)"#).unwrap();
+    let body = &composite.body;
+    let mut out = Vec::new();
+    for capture in emit_re.captures_iter(body) {
+        let whole = capture.get(0).unwrap();
+        if calls.iter().any(|call| call.span.0 < whole.start() && whole.end() <= call.span.1) {
+            continue;
+        }
+        let suffix = &capture[1];
+        let message = message_re.captures(&body[whole.end()..]).ok_or_else(|| {
+            format!("{}: no message argument after the rule ID ending {suffix:?}", composite.file)
+        })?;
+        let source = match (message.get(1), message.get(2)) {
+            (Some(text), _) => MessageSource::Literal(unescape_continuations(text.as_str())),
+            (_, Some(param)) => MessageSource::Param(param.as_str().to_string()),
+            _ => unreachable!("message_re matches one alternative"),
+        };
+        if suffix.contains("{field}") {
+            let fields = loop_fields(body, whole.start()).ok_or_else(|| {
+                format!("{}: no `in [...]` field list before {suffix:?}", composite.file)
+            })?;
+            for field in fields {
+                out.push((suffix.replace("{field}", &field), source.clone()));
+            }
+        } else {
+            out.push((suffix.to_string(), source));
+        }
+    }
+    Ok(out)
+}
+
+/// The field names in the `for (value, field) in [(.., "x"), ...]` list
+/// that precedes `position` in `body`.
+fn loop_fields(body: &str, position: usize) -> Option<Vec<String>> {
+    let open = body[..position].rfind("in [")? + 3;
+    let close = matching_close(body, open)?;
+    let field_re = Regex::new(r#""(\w+)"\s*,?\s*\)"#).unwrap();
+    let fields: Vec<String> = field_re
+        .captures_iter(&body[open..close])
+        .map(|capture| capture[1].to_string())
+        .collect();
+    (!fields.is_empty()).then_some(fields)
+}
+
+/// The prefix an argument passes on: a literal, the caller's own
+/// `rule_id_prefix`, or `&format!("{rule_id_prefix}<more>")`.
+fn prefix_value(arg: &str, current: Option<&str>) -> Option<String> {
+    if let Some(text) = string_literal(arg) {
+        return Some(text);
+    }
+    let current = current?;
+    if arg == "rule_id_prefix" {
+        return Some(current.to_string());
+    }
+    let extended_re = Regex::new(r#"^&?format!\(\s*"\{rule_id_prefix\}([^"]*)"\s*\)$"#).unwrap();
+    extended_re
+        .captures(arg)
+        .map(|capture| format!("{current}{}", &capture[1]))
+}
+
+/// The value of `arg` if it is a single string literal.
+fn string_literal(arg: &str) -> Option<String> {
+    let literal_re = Regex::new(r#"(?s)^"((?:[^"\\]|\\.)*)"$"#).unwrap();
+    literal_re
+        .captures(arg.trim())
+        .map(|capture| unescape_continuations(&capture[1]))
+}
+
+/// The index of the bracket that closes the one at `open` (`(`, `[` or
+/// `{`), skipping over string literals.
+fn matching_close(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let (mut depth, mut in_string, mut index) = (0usize, false, open);
+    while index < bytes.len() {
+        match (in_string, bytes[index]) {
+            (true, b'\\') => index += 1,
+            (true, b'"') => in_string = false,
+            (true, _) => {}
+            (false, b'"') => in_string = true,
+            (false, b'(' | b'[' | b'{') => depth += 1,
+            (false, b')' | b']' | b'}') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// `text` split at its top-level commas (not inside brackets or strings),
+/// each part trimmed, empty parts (a trailing comma) dropped.
+fn split_top_level(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let (mut depth, mut in_string, mut start, mut index) = (0usize, false, 0, 0);
+    let mut parts = Vec::new();
+    while index < bytes.len() {
+        match (in_string, bytes[index]) {
+            (true, b'\\') => index += 1,
+            (true, b'"') => in_string = false,
+            (true, _) => {}
+            (false, b'"') => in_string = true,
+            (false, b'(' | b'[' | b'{') => depth += 1,
+            (false, b')' | b']' | b'}') => depth = depth.saturating_sub(1),
+            (false, b',') if depth == 0 => {
+                parts.push(text[start..index].trim().to_string());
+                start = index + 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    parts.push(text[start..].trim().to_string());
+    parts.retain(|part| !part.is_empty());
+    parts
 }
 
 /// Everything in `content` up to (not including) the file's `#[cfg(test)]`
@@ -496,10 +859,9 @@ fn check_completeness(
                 // its home file -- e.g. a session rule ID asserted against
                 // in a `sapient-test-harness-cli` integration test -- isn't
                 // new, unaccounted-for evidence; only flag it once. Likewise
-                // a prefix-combined rule ID (e.g. "alert.location.x.missing",
-                // built at runtime from prefix "alert.location" plus a
-                // `common.rs` composite validator's runtime suffix) is
-                // already documented under "Composite validator suffixes"
+                // anything under a composite prefix (e.g.
+                // "alert.location.x.missing", or the field path
+                // "alert.location.x") is covered by the composite expansion
                 // even though this literal text never appears in
                 // `validation/*.rs` itself -- it's only ever written out by
                 // a test asserting against it.
