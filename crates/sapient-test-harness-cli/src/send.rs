@@ -285,16 +285,10 @@ async fn connect_as_dmm(target: &str, connect_timeout: Duration) -> io::Result<T
     Ok(stream)
 }
 
+/// Connects out as an Edge Node, retrying every second within
+/// `connect_timeout` like `run` and `session` (see `connect_with_retries`,
+/// which reports retries and the final connection on stderr).
 async fn connect_as_asm(target: &str, connect_timeout: Duration) -> io::Result<TcpStream> {
     println!("Connecting to {target}...");
-    let stream = timeout(connect_timeout, TcpStream::connect(target))
-        .await
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("could not connect to {target} within {connect_timeout:?}"),
-            )
-        })??;
-    println!("Connected.");
-    Ok(stream)
+    crate::run::connect_with_retries(target, connect_timeout).await
 }

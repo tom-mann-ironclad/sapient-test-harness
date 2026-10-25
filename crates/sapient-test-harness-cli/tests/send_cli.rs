@@ -1,7 +1,8 @@
-//! `send` shares its connection setup with `run` (KI-023: hostnames were
-//! rejected outright) but has its own copy of the fix in `connect_as_dmm`/
-//! `connect_as_asm`, so it needs its own regression coverage -- a fix to
-//! one function's copy wouldn't touch the other.
+//! `send`'s connection setup: the Fusion Node role has its own listen code
+//! (`connect_as_dmm`), while the Edge Node role uses `run`'s retrying
+//! connect (`connect_with_retries`). Both get regression coverage here
+//! (KI-023: hostnames were rejected outright), since a fix in `run` alone
+//! wouldn't prove `send` is wired to it.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -247,4 +248,94 @@ async fn validation_warning_and_sent_print_before_the_reply_is_received() {
     .unwrap();
 
     let _ = std::fs::remove_file(&file);
+}
+
+/// `--role edge` started before its target is listening: retries connect
+/// once the target comes up, as `run` and `session` do, and the file is sent.
+#[tokio::test]
+async fn edge_role_retries_until_the_target_starts_listening() {
+    let file = std::env::temp_dir().join("send_cli_retry_registration_ack.json");
+    registration_ack_json(&file);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+
+    timeout(Duration::from_secs(15), async {
+        let child = Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "send",
+                "--role",
+                "edge",
+                "--target",
+                &address.to_string(),
+                "--connect-timeout-secs",
+                "10",
+                "--response-timeout-secs",
+                "1",
+                "--file",
+                file.to_str().unwrap(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        // Long enough for at least one refused attempt before listening.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let listener = TcpListener::bind(address).await.unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let mut header = [0u8; 4];
+        peer.read_exact(&mut header).await.unwrap();
+        drop(child);
+    })
+    .await
+    .expect("send must connect once the target starts listening");
+
+    let _ = std::fs::remove_file(&file);
+}
+
+/// A target that never listens: retries stop at `--connect-timeout-secs`
+/// with a harness-level error (exit 2) naming the refusal.
+#[tokio::test]
+async fn edge_role_gives_up_retrying_at_the_connect_timeout() {
+    let file = std::env::temp_dir().join("send_cli_retry_giveup.json");
+    registration_ack_json(&file);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+
+    let started = std::time::Instant::now();
+    let output = timeout(
+        Duration::from_secs(10),
+        Command::new(env!("CARGO_BIN_EXE_sapient-harness"))
+            .args([
+                "send",
+                "--role",
+                "edge",
+                "--target",
+                &address,
+                "--connect-timeout-secs",
+                "2",
+                "--file",
+                file.to_str().unwrap(),
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("retries must stop at the connect timeout")
+    .unwrap();
+    let _ = std::fs::remove_file(&file);
+
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "gave up before the connect timeout: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("attempt(s)") && stderr.contains("refused"),
+        "{stderr}"
+    );
 }

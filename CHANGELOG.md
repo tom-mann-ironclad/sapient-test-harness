@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `examples/messages/from-edge-node/06-detection-report-malformed.json`: a
+  deliberately non-conformant DetectionReport (invalid `reportId`), for
+  checking how a Fusion Node under test handles bad input.
+
+### Changed
+
+- `send --role edge` now retries a failed connection every second until
+  `--connect-timeout-secs` runs out, like `run` and `session`, instead of
+  failing on the first refusal.
+
 ## 1.0.0-beta.6
 
 ### Changed

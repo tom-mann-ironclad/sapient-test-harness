@@ -350,6 +350,10 @@ That's the point: it's for testing how your implementation handles things
 `run`'s fixed scenario doesn't cover, including things that shouldn't be
 valid.
 
+With `--role edge`, `send` retries a refused or failed connection every
+second until `--connect-timeout-secs` (default 30) runs out, like `run` and
+`session`.
+
 `send --write-timeout-secs <N>` (default 30) bounds transmission of each file.
 A write timeout closes the connection and exits 2; subsequent files are not sent.
 `--response-timeout-secs` separately bounds the wait for a reply after sending.

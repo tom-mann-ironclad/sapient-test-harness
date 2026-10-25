@@ -75,7 +75,8 @@ pub struct SendArgs {
     pub files: Vec<PathBuf>,
 
     /// How long to wait for the peer to connect (`--role fusion`) or for the
-    /// outbound connection to establish (`--role edge`), in seconds.
+    /// outbound connection to establish (`--role edge`, retried every second
+    /// within this time), in seconds.
     #[arg(long, default_value_t = 30)]
     pub connect_timeout_secs: u64,
 
