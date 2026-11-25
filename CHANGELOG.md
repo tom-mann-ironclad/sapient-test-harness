@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- Updated `tokio` to 1.54.1 (RUSTSEC-2026-0386: `AsyncFd::new` and related
+  constructors violate I/O safety) and `rustix` to 1.1.6
+  (RUSTSEC-2026-0486, used only by the test suite's `tempfile`), and
+  replaced the yanked `clipboard-win` 5.4.1 (a Windows dependency of
+  `rustyline`) with 5.4.3. `cargo audit` now reports no warnings.
+
+### Fixed
+
+- Release builds for Apple Silicon (`aarch64-apple-darwin`) run on
+  GitHub's `macos-15` runner instead of the retired `macos-14`, which
+  failed the release build.
+
 ## 1.0.0-beta.8
 
 ### Fixed
