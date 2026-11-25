@@ -937,6 +937,31 @@ fn alert_receives_an_alert_ack_reply() {
 }
 
 #[test]
+fn issued_task_is_addressed_to_the_registered_edge_node() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+
+    // Before registration there's no peer to address.
+    let unaddressed = decode(&session.issue_task(&Task {
+        task_id: Some("01H1VV3VN40RV97CDFSXJB44K8".to_string()),
+        control: Some(1),
+        ..Default::default()
+    }));
+    assert_eq!(unaddressed.destination_id, None);
+    assert_eq!(session.peer_node_id(), None);
+
+    register(&mut session);
+    assert_eq!(session.peer_node_id().as_deref(), Some(ASM_NODE_ID));
+    let message = decode(&session.issue_task(&Task {
+        task_id: Some("01H1VV3VN40RV97CDFSXJB44KA".to_string()),
+        control: Some(1),
+        ..Default::default()
+    }));
+    assert_eq!(message.node_id.as_deref(), Some(HARNESS_NODE_ID));
+    assert_eq!(message.destination_id.as_deref(), Some(ASM_NODE_ID));
+    assert!(matches!(message.content, Some(Content::Task(_))));
+}
+
+#[test]
 fn task_ack_correlates_against_outstanding_tasks() {
     let mut session = DmmSession::new(HARNESS_NODE_ID);
     register(&mut session);

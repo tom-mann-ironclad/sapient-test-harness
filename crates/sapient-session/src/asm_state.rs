@@ -150,6 +150,12 @@ impl AsmSession {
         self.last_reply
     }
 
+    /// The Fusion Node's node ID, used as `destination_id` on everything the
+    /// harness sends. `None` until the Fusion Node has sent a message.
+    pub fn peer_node_id(&self) -> Option<String> {
+        self.peer_node_id.clone()
+    }
+
     pub fn state(&self) -> &AsmSessionState {
         &self.state
     }

@@ -84,6 +84,11 @@ where
         self.session.last_reply()
     }
 
+    /// See the session's `peer_node_id`: the `destination_id` on outgoing messages.
+    pub fn peer_node_id(&self) -> Option<String> {
+        self.session.peer_node_id()
+    }
+
     pub fn state(&self) -> &AsmSessionState {
         self.session.state()
     }

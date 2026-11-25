@@ -299,7 +299,12 @@ where
         }
         "alert" => {
             let alert = scripted_alert(Ulid::new().to_string());
-            validate_before_send(log, options, Content::Alert(alert.clone()));
+            validate_before_send(
+                log,
+                options,
+                connection.peer_node_id(),
+                Content::Alert(alert.clone()),
+            );
             write(connection.issue_alert(alert.clone()), options).await?;
             log.sent("Alert", alert.alert_id.as_deref());
         }
@@ -313,13 +318,13 @@ where
                 }
                 Some(Content::Alert(mut alert)) => {
                     alert.alert_id = Some(Ulid::new().to_string());
-                    validate_before_send(log, options, Content::Alert(alert.clone()));
+                    validate_before_send(log, options, connection.peer_node_id(), Content::Alert(alert.clone()));
                     write(connection.issue_alert(alert.clone()), options).await?;
                     log.sent("Alert", alert.alert_id.as_deref());
                 }
                 Some(Content::StatusReport(mut status)) => {
                     status.report_id = Some(Ulid::new().to_string());
-                    validate_before_send(log, options, Content::StatusReport(status.clone()));
+                    validate_before_send(log, options, connection.peer_node_id(), Content::StatusReport(status.clone()));
                     write(connection.issue_status_report(status.clone()), options).await?;
                     log.sent("StatusReport", status.report_id.as_deref());
                 }
@@ -385,7 +390,12 @@ where
     W: AsyncWrite + Unpin,
 {
     detection.report_id = Some(Ulid::new().to_string());
-    validate_before_send(log, options, Content::DetectionReport(detection.clone()));
+    validate_before_send(
+        log,
+        options,
+        connection.peer_node_id(),
+        Content::DetectionReport(detection.clone()),
+    );
     write(
         connection.issue_detection_report(detection.clone()),
         options,
@@ -541,7 +551,12 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    validate_before_send(log, options, Content::Task(task.clone()));
+    validate_before_send(
+        log,
+        options,
+        connection.peer_node_id(),
+        Content::Task(task.clone()),
+    );
     write(connection.issue_task(&task), options).await?;
     let label = match target_mode {
         Some(mode) => format!("Task (mode_change to {mode:?})"),
@@ -593,13 +608,19 @@ fn load_for_send(log: &mut Log, options: &Options, path: &str) -> Option<Sapient
     }
 }
 
-/// Validate `content` as it will go out (current timestamp, harness node ID)
-/// and warn about any finding. Like `send`, it's sent regardless.
-fn validate_before_send(log: &mut Log, options: &Options, content: Content) {
+/// Validate `content` as it will go out (current timestamp, harness node ID,
+/// `destination` from the connection's peer) and warn about any finding.
+/// Like `send`, it's sent regardless.
+fn validate_before_send(
+    log: &mut Log,
+    options: &Options,
+    destination: Option<String>,
+    content: Content,
+) {
     let message = SapientMessage {
         timestamp: Some(now_timestamp()),
         node_id: Some(options.harness_node_id.clone()),
-        destination_id: None,
+        destination_id: destination,
         content: Some(content),
         additional_information: None,
     };

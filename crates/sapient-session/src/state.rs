@@ -919,6 +919,8 @@ impl DmmSession {
     /// inbound traffic). Tracks the `task_id` as outstanding until a
     /// terminal `TaskAck` arrives. A mode request is stored separately and only
     /// activates on Accepted/Completed; merely sending it does not change modes.
+    /// Like the harness's replies, it's addressed to the registered Edge Node
+    /// (no `destination_id` if nothing has registered yet).
     pub fn issue_task(&mut self, task: &Task) -> Vec<u8> {
         self.outbound_sequence += 1;
         self.findings.set_context(MessageContext {
@@ -983,7 +985,8 @@ impl DmmSession {
             });
         }
 
-        self.encode(self.wrap(Content::Task(task.clone()), None))
+        let destination = self.peer_node_id();
+        self.encode(self.wrap(Content::Task(task.clone()), destination))
     }
 
     fn registration_ack_reply(&self, accepted: bool, reasons: Vec<String>) -> SapientMessage {
@@ -1020,7 +1023,9 @@ impl DmmSession {
         )
     }
 
-    fn peer_node_id(&self) -> Option<String> {
+    /// The registered Edge Node's node ID, used as `destination_id` on
+    /// everything the harness sends. `None` until registration succeeds.
+    pub fn peer_node_id(&self) -> Option<String> {
         match &self.state {
             SessionState::Registered(contract) => Some(contract.node_id.clone()),
             SessionState::AwaitingRegistration => None,

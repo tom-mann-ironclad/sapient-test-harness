@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Tasks sent by the Fusion Node role (`session --role fusion`'s `task` and
+  `send` commands, and the `run` scenario) now carry `destination_id` set to
+  the registered Edge Node's node ID, like the harness's RegistrationAck,
+  AlertAck and Error replies. Previously they had no `destination_id`.
+- `session`'s check that warns before sending a non-conformant message now
+  checks it with the `destination_id` it's actually sent with (the
+  registered peer's node ID) instead of none, in both roles.
+
 ## 1.0.0-beta.7
 
 ### Added
