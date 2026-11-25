@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-beta.9
+
+1.0.0-beta.8 was tagged but never released (its release build failed on
+the retired `macos-14` runner), so its changes are included here.
 
 ### Security
 
@@ -15,11 +18,6 @@
 - Release builds for Apple Silicon (`aarch64-apple-darwin`) run on
   GitHub's `macos-15` runner instead of the retired `macos-14`, which
   failed the release build.
-
-## 1.0.0-beta.8
-
-### Fixed
-
 - Tasks sent by the Fusion Node role (`session --role fusion`'s `task` and
   `send` commands, and the `run` scenario) now carry `destination_id` set to
   the registered Edge Node's node ID, like the harness's RegistrationAck,
