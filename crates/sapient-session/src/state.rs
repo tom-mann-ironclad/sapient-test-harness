@@ -35,6 +35,7 @@ use sapient_conformance_core::{
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
 use crate::finding_log::{FindingLog, content_type_name, now_unix_millis};
+use crate::node_id::valid_node_id;
 
 /// Progress from the most recently processed message. These events let callers
 /// distinguish acknowledged work from state cleared by GoodBye/re-registration.
@@ -1024,10 +1025,12 @@ impl DmmSession {
     }
 
     /// The registered Edge Node's node ID, used as `destination_id` on
-    /// everything the harness sends. `None` until registration succeeds.
+    /// everything the harness sends. `None` until registration succeeds, or
+    /// if the Registration's `node_id` wasn't a valid UUID v4 (that's already
+    /// an envelope finding, and isn't echoed back).
     pub fn peer_node_id(&self) -> Option<String> {
         match &self.state {
-            SessionState::Registered(contract) => Some(contract.node_id.clone()),
+            SessionState::Registered(contract) => valid_node_id(Some(&contract.node_id)),
             SessionState::AwaitingRegistration => None,
         }
     }

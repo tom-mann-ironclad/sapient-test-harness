@@ -11,6 +11,7 @@ pub mod dmm;
 mod finding_log;
 pub mod fixtures;
 pub mod framing;
+mod node_id;
 pub mod state;
 
 pub use asm_state::{AsmEvent, AsmSession, AsmSessionState, RegisteredAsmContract};

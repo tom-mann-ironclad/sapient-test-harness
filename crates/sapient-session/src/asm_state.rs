@@ -27,6 +27,7 @@ use sapient_conformance_core::{
 
 use crate::active_mode::{ActiveModeError, ActiveModeSource, resolve_active_mode};
 use crate::finding_log::{FindingLog, content_type_name, now_unix_millis};
+use crate::node_id::valid_node_id;
 
 /// Progress from the most recently processed inbound message, consumed with
 /// [`AsmSession::take_event`]. Invalid or uncorrelated AlertAck payloads do not
@@ -151,7 +152,8 @@ impl AsmSession {
     }
 
     /// The Fusion Node's node ID, used as `destination_id` on everything the
-    /// harness sends. `None` until the Fusion Node has sent a message.
+    /// harness sends. `None` until the Fusion Node has sent a message with a
+    /// valid (UUID v4) `node_id`.
     pub fn peer_node_id(&self) -> Option<String> {
         self.peer_node_id.clone()
     }
@@ -278,8 +280,10 @@ impl AsmSession {
         // expose payload and sequencing issues too. Envelope findings affect the
         // final verdict, not the existing reply/state-transition policy.
         self.findings.extend(validate_envelope(&message).findings);
+        // Take the first *valid* node ID the Fusion Node sends; an invalid
+        // one is already an envelope finding, and isn't echoed back.
         if self.peer_node_id.is_none() {
-            self.peer_node_id = message.node_id.clone();
+            self.peer_node_id = valid_node_id(message.node_id.as_deref());
         }
 
         match content {

@@ -962,6 +962,35 @@ fn issued_task_is_addressed_to_the_registered_edge_node() {
 }
 
 #[test]
+fn invalid_registering_node_id_is_not_used_as_destination() {
+    let mut session = DmmSession::new(HARNESS_NODE_ID);
+    let reply = session
+        .on_bytes(&encode(envelope(
+            "not-a-uuid",
+            HARNESS_NODE_ID,
+            0,
+            Content::Registration(valid_registration()),
+        )))
+        .expect("Registration should always get a RegistrationAck reply");
+    assert!(matches!(session.state(), SessionState::Registered(_)));
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "sapient_message.node_id.invalid")
+    );
+    assert_eq!(decode(&reply).destination_id, None);
+    assert_eq!(session.peer_node_id(), None);
+
+    let task = decode(&session.issue_task(&Task {
+        task_id: Some("01H1VV3VN40RV97CDFSXJB44KA".to_string()),
+        control: Some(1),
+        ..Default::default()
+    }));
+    assert_eq!(task.destination_id, None);
+}
+
+#[test]
 fn task_ack_correlates_against_outstanding_tasks() {
     let mut session = DmmSession::new(HARNESS_NODE_ID);
     register(&mut session);

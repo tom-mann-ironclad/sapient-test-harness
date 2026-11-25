@@ -11,6 +11,13 @@
 - `session`'s check that warns before sending a non-conformant message now
   checks it with the `destination_id` it's actually sent with (the
   registered peer's node ID) instead of none, in both roles.
+- The harness only addresses messages to a peer node ID that is a valid
+  UUID v4. A malformed `node_id` is still reported as
+  `sapient_message.node_id.invalid` on the peer's message, but it's no longer
+  echoed back as the `destination_id` of everything the harness sends: in
+  the Edge Node role the harness waits for the first valid one; in the
+  Fusion Node role, messages to an Edge Node that registered with an invalid
+  `node_id` have no `destination_id`.
 
 ## 1.0.0-beta.7
 

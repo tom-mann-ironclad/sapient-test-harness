@@ -695,3 +695,38 @@ fn wrong_role_message_inbound_is_a_finding() {
             .any(|f| f.rule_id == "session.unexpected_message_for_role"),
     );
 }
+
+#[test]
+fn fusion_node_id_is_only_stored_once_valid() {
+    let mut session = AsmSession::new(HARNESS_NODE_ID);
+    session.register(valid_registration());
+    let ack = |node_id: &str| {
+        encode(common::envelope(
+            node_id,
+            HARNESS_NODE_ID,
+            0,
+            Content::RegistrationAck(RegistrationAck {
+                acceptance: Some(true),
+                ack_response_reason: vec![],
+            }),
+        ))
+    };
+
+    // A malformed node ID is reported, not stored or echoed back.
+    session.on_bytes(&ack("not-a-uuid"));
+    assert!(
+        session
+            .findings()
+            .iter()
+            .any(|f| f.rule_id == "sapient_message.node_id.invalid")
+    );
+    assert_eq!(session.peer_node_id(), None);
+    let unaddressed = decode(&session.issue_status_report(StatusReport::default()));
+    assert_eq!(unaddressed.destination_id, None);
+
+    // The first valid one is used from then on.
+    session.on_bytes(&ack(DMM_NODE_ID));
+    assert_eq!(session.peer_node_id().as_deref(), Some(DMM_NODE_ID));
+    let addressed = decode(&session.issue_status_report(StatusReport::default()));
+    assert_eq!(addressed.destination_id.as_deref(), Some(DMM_NODE_ID));
+}
